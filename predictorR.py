@@ -314,7 +314,7 @@ def predict_by_mtrt(mtrt_str='', target_code=None, df=None, **kargs):
     """
     from loinc import LoincMTRT
 
-    # col_key = kargs.get('col_key', lmt.col_key) # 'Test Result LOINC Code'
+    col_key = kargs.get('col_key', lmt.col_key) # 'Test Result LOINC Code'
     if df is None: df = lmt.load_loinc_to_mtrt(dehyphenate=True, dequote=True) # input_file/LoincMTRT.table
     
     # verify 
@@ -324,6 +324,7 @@ def predict_by_mtrt(mtrt_str='', target_code=None, df=None, **kargs):
         assert v.find('"') < 0
     assert len(mtrt_str) > 0 or code is not None
 
+    
     print("(predict_by_mtrt) df.columns: {}".format(df.columns.values))
     print("(predict_by_mtrt) dim(df): {} | n_codes".format(df.shape, len(df[col_key].unique())) )
     
