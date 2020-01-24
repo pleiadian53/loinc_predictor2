@@ -24,8 +24,8 @@ already exist for certain patient records, then this module can serve as a LOINC
 
 Prerequisite
 ------------
-For ease of illustration, we will now assume that the package (loinc_predictor) is installed 
-under <project_dir>/loinc_predictor such that all the related files are directly under loinc_predictor
+For ease of illustration, we shall assume that the package (loinc_predictor) is installed under 
+<project_dir>/loinc_predictor, where project_dir is the directory of your choice hosting this module.
 
 
 1. Non-standard modules: Please install the following dependent packages
