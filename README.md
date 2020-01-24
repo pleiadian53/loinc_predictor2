@@ -28,7 +28,10 @@ For ease of illustration, we shall assume that the package (loinc_predictor) is 
 `<project_dir>/loinc_predictor`, where project_dir is the directory of your choice hosting this module.
 
 
-1. Non-standard modules: Please install the following dependent packages
+**1. Non-standard modules**: 
+
+   Please install the following dependent packages
+   
    - [tabulate](https://pypi.org/project/tabulate/): Pretty print tabular data such as pandas dataframe
    - [feature_selector](https://pypi.org/project/feature-selector/): Used to identify and select important features for ML algorithms
    - [gensim](https://pypi.org/project/gensim/): A library for information retrival, topic modeling, string comparisons and other NLP tasks 
@@ -54,7 +57,7 @@ The clinical variables used to predict/correct LOINC codes are the columns/attri
 
 Due to the size limit, we will not share the full dataset here. However, coming up, we shall upload sample (toy) datasets ... 
 
-3. External, non-target-disease data:
+**3. External, non-target-disease data**:
 
 Similar to the input training data, "external data" may be gathered for balancing the sample sizes 
 in the training data given in (2). A careful EDA will show that a least a subset of LOINC This external data from non-target disease 
@@ -62,7 +65,7 @@ cohort are also, by default, assumed to be kept under <project_dir>/loinc_predic
 
 Note that the 
 
-4. Loinc resources: 
+**4. Loinc resources**: 
 
 Relevant files such as LoincTable.csv, MapTo.csv are kept under:
 
