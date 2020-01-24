@@ -38,7 +38,14 @@ For ease of illustration, we shall assume that the package (loinc_predictor) is 
 Training LOINC predictive models requires input training data. These data are assumed to 
 have been made available and kept under <project_dir>/loinc_predictor/data
 
-The training data source came from subsampling Andromeda datalake. Coming up, we will upload sample datasets. 
+The training data are curated based on the disease of interest. For instannce, a Hepatitis-C data consists of 
+sampled rows of patient data from Andromeda that match a set of ICD codes pertaiing to Hepatitis C. Please refer to 
+[Clinica Classfication Software](https://www.hcup-us.ahrq.gov/tools_software.jsp) on Healthcare Cost and 
+Utilization Project (HCUP) website for more info on how to obtain the target ICD codes for different clinical conditions of interest.
+
+The training data source came from subsampling Andromeda datalake. 
+
+Coming up, we will upload sample datasets. 
 
 3. External data used to balance classes: 
 
