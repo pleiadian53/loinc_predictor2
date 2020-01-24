@@ -60,10 +60,12 @@ Due to the size limit, we will not share the full dataset here. However, coming 
 **3. External, non-target-disease data**:
 
 Similar to the input training data, "external data" may be gathered for balancing the sample sizes 
-in the training data given in (2). A careful EDA will show that a least a subset of LOINC This external data from non-target disease 
-cohort are also, by default, assumed to be kept under <project_dir>/loinc_predictor/data
+in the training data given in (2). A careful EDA will often indicate that a subset of LOINC codes have small sample sizes. To balance 
+the class sample sizes as much as possible, it may be of interest to gather more training data from random subset of Andromeda matching 
+our disease-specific LOINC codes. 
 
-Note that the 
+This external data from non-target disease cohort are also, by default, assumed to be kept under <project_dir>/loinc_predictor/data
+
 
 **4. Loinc resources**: 
 
