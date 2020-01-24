@@ -38,19 +38,27 @@ For ease of illustration, we shall assume that the package (loinc_predictor) is 
 Training LOINC predictive models requires input training data. These data are assumed to 
 have been made available and kept under <project_dir>/loinc_predictor/data
 
-The training data are curated based on the disease of interest. For instannce, a Hepatitis-C data consists of 
+The training data are curated based on the disease of interest. For instannce, a Hepatitis-C dataset would comprise 
 sampled rows of patient data from Andromeda that match a set of ICD codes pertaiing to Hepatitis C. Please refer to 
 [Clinica Classfication Software](https://www.hcup-us.ahrq.gov/tools_software.jsp) on Healthcare Cost and 
 Utilization Project (HCUP) website for more info on how to obtain the target ICD codes for different clinical conditions of interest.
 
-The training data source came from subsampling Andromeda datalake. 
+The data source came from subsampling Andromeda datalake. The clinical variables used to predict/correct LOINC codes 
+are the columns/attributes of the table obtraind from applying transformations.withMedivoTestResultType() available from 
+[Samantha](https://github.com/medivo/samantha/blob/master/src/main/scala/ai/prognos/samantha/clinical/transformations.scala). Note 
+that useful variables for the prediction may be just a subset of these patient attributes. Example variables are: `test_result_name`, 
+`test_result_value`, `test_order_name`, `test_result_units_of_measure`, among many others. Class labels for the training 
+data are the LOINC codes (as they are what we are trying to predict). LOINC labels are avaiable through `test_result_loinc_code`. 
 
-Coming up, we will upload sample datasets. 
+Coming up, we will upload sample datasets ... 
 
-3. External data used to balance classes: 
+3. External, non-target-disease data:
 
-Similar to the input training data, extra training data gathered from non-target disease 
-cohort are also, by default, assumed to the kept under <project_dir>/loinc_predictor/data
+Similar to the input training data, "external data" may be gathered for balancing the sample sizes 
+in the training data given in (2). A careful EDA will show that a least a subset of LOINC This external data from non-target disease 
+cohort are also, by default, assumed to be kept under <project_dir>/loinc_predictor/data
+
+Note that the 
 
 4. Loinc resources: 
 
