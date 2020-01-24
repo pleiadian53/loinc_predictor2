@@ -51,6 +51,7 @@ Relevant files such as LoincTable.csv, MapTo.csv are kept under:
 Directory Structure
 -------------------
 
+```bash
 loinc_predictor/
 │
 ├── analyzer.py (main entry) 
@@ -74,7 +75,7 @@ loinc_predictor/
 ├── MANIFEST.in
 ├── README.md
 └── setup.py
-
+```
 
 Input and Output
 ----------------
