@@ -64,7 +64,7 @@ in the training data given in (2). A careful EDA will often indicate that a subs
 the class sample sizes as much as possible, it may be of interest to gather more training data from random subset of Andromeda matching 
 our disease-specific LOINC codes. 
 
-This external data from non-target disease cohort are also, by default, assumed to be kept under <project_dir>/loinc_predictor/data
+This external data from non-target disease cohort are also, by default, assumed to be kept under `<project_dir>/loinc_predictor/data`
 
 
 **4. Loinc resources**: 
