@@ -69,9 +69,7 @@ This external data from non-target disease cohort are also, by default, assumed 
 
 **4. Loinc resources**: 
 
-Relevant files such as LoincTable.csv, MapTo.csv are kept under:
-
-<project_dir>/loinc_predictor/LoincTable
+Relevant files such as **LoincTable.csv**, MapTo.csv are expected to be read from: `<project_dir>/loinc_predictor/LoincTable`
 
 
 ## Directory Structure
