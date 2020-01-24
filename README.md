@@ -33,7 +33,7 @@ For ease of illustration, we shall assume that the package (loinc_predictor) is 
    - [feature_selector](https://pypi.org/project/feature-selector/): Used to identify and select important features for ML algorithms
    - [gensim](https://pypi.org/project/gensim/): A library for information retrival, topic modeling, string comparisons and other NLP tasks 
 
-2. Input data:
+2. **Input data**:
 
 Training LOINC predictive models requires input training data. These data are assumed to 
 have been made available and kept under `<project_dir>/loinc_predictor/data`
@@ -47,7 +47,7 @@ labels (i.e. multiclass classfication problem with large number of classes). The
 basis. 
 
 Once the target disease is given, we are now ready to gather data from Andromeda datalake. A Hepatitis-C dataset would comprise sampled rows of patient data from Andromeda that match a set of ICD codes pertaining to Hepatitis C. Please refer to [Clinical Classfication Software](https://www.hcup-us.ahrq.gov/tools_software.jsp) on the Healthcare Cost and Utilization Project (HCUP) website for more info on how to obtain the target ICD codes for different clinical conditions of interest. After obtaining the set of related ICD codes, we can then post queries 
-with respect to the columns: `diagnosis_codes` and `billing_diagnosis_codes` to pull relevant rows from Andromeda (see cohort_search.py for 
+with respect to the columns: `diagnosis_codes` and `billing_diagnosis_codes` to pull relevant rows from Andromeda (see **cohort_search.py** for 
 example queries).
 
 The clinical variables used to predict/correct LOINC codes are the columns/attributes of the table obtraind from applying transformations.withMedivoTestResultType() available from [Samantha](https://github.com/medivo/samantha/blob/master/src/main/scala/ai/prognos/samantha/clinical/transformations.scala). Note that useful variables for the prediction may be just a subset of these patient attributes. Example variables are: `test_result_name`, `test_result_value`, `test_order_name`, `test_result_units_of_measure`, among many others. Class labels for the training data are the LOINC codes (as they are what we are trying to predict). LOINC labels are avaiable through `test_result_loinc_code`. 
