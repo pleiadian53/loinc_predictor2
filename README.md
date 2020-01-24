@@ -48,8 +48,7 @@ Relevant files such as LoincTable.csv, MapTo.csv are kept under:
 <project_dir>/loinc_predictor/LoincTable
 
 
-Directory Structure
--------------------
+## Directory Structure
 
 ```bash
 loinc_predictor/
