@@ -25,7 +25,7 @@ already exist for certain patient records, then this module can serve as a LOINC
 Prerequisite
 ------------
 For ease of illustration, we shall assume that the package (loinc_predictor) is installed under 
-<project_dir>/loinc_predictor, where project_dir is the directory of your choice hosting this module.
+`<project_dir>/loinc_predictor`, where project_dir is the directory of your choice hosting this module.
 
 
 1. Non-standard modules: Please install the following dependent packages
@@ -36,7 +36,7 @@ For ease of illustration, we shall assume that the package (loinc_predictor) is 
 2. Input data:
 
 Training LOINC predictive models requires input training data. These data are assumed to 
-have been made available and kept under <project_dir>/loinc_predictor/data
+have been made available and kept under `<project_dir>/loinc_predictor/data`
 
 Data can be curated from subsampling Andromeda datalake. A few tips on the training data curation. 
 
@@ -52,7 +52,7 @@ example queries).
 
 The clinical variables used to predict/correct LOINC codes are the columns/attributes of the table obtraind from applying transformations.withMedivoTestResultType() available from [Samantha](https://github.com/medivo/samantha/blob/master/src/main/scala/ai/prognos/samantha/clinical/transformations.scala). Note that useful variables for the prediction may be just a subset of these patient attributes. Example variables are: `test_result_name`, `test_result_value`, `test_order_name`, `test_result_units_of_measure`, among many others. Class labels for the training data are the LOINC codes (as they are what we are trying to predict). LOINC labels are avaiable through `test_result_loinc_code`. 
 
-Coming up, we will upload sample datasets ... 
+Due to the size limit, we will not share the full dataset here. However, coming up, we shall upload sample (toy) datasets ... 
 
 3. External, non-target-disease data:
 
