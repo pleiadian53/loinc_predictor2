@@ -33,7 +33,7 @@ For ease of illustration, we shall assume that the package (loinc_predictor) is 
    - [feature_selector](https://pypi.org/project/feature-selector/): Used to identify and select important features for ML algorithms
    - [gensim](https://pypi.org/project/gensim/): A library for information retrival, topic modeling, string comparisons and other NLP tasks 
 
-2. **Input data**:
+**2. Input data**:
 
 Training LOINC predictive models requires input training data. These data are assumed to 
 have been made available and kept under `<project_dir>/loinc_predictor/data`
