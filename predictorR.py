@@ -110,21 +110,21 @@ class MTRTClassifier(BaseEstimator, ClassifierMixin):
         # counts number of values bigger than mean
         return(sum(self.predict(X))) 
 
-def extract0(mtrt_str, code=''):
+def process_each(mtrt_str, code=''):
     def split_and_strip(s): 
         return ' '.join([str(e).strip() for e in s.split()])
     
-    header = lmt.header[0]  # LoincMTRT
+    header = lmt.header  # LoincMTRT
     adict = {h:[] for h in header}
-    adict[header[0]].append(code)
+    adict[header[0]].append(str(code))
     adict[header[1]].append(mtrt_str)
     df = DataFrame(adict, columns=adict.keys())
 
-    df = extract(df)
+    df = process_loinc_to_mtrt(df)
     
     return dict(df.iloc[0])
 
-def extract(df, col='Medivo Test Result Type', save=False):
+def process_loinc_to_mtrt(df, col='Medivo Test Result Type', save=False):
     """
 
 
@@ -329,11 +329,16 @@ def predict_by_mtrt(mtrt_str='', target_code=None, df=None, **kargs):
     print("(predict_by_mtrt) dim(df): {} | n_codes".format(df.shape, len(df[col_key].unique())) )
     
     # string matching algorithm
-    df = extract(df)
+    df = process_loinc_to_mtrt(df)
 
     LoincMTRT.save_derived_loinc_to_mtrt(df)
+
+    o = process_each('Albumin [Mass/volume] in Urine', code=17541)
+    print(o)
     
     return
+
+
 
 def encode_mtrt_tdidf(docs):  
     """
@@ -379,6 +384,11 @@ def t_tdidf(**kargs):
     mydict = corpora.Dictionary([simple_preprocess(line) for line in documents])
     corpus = [mydict.doc2bow(simple_preprocess(line)) for line in documents]
         
+def demo_experta(**kargs):
+    from random import choice
+    # from experta import *
+
+    return
 
 def t_predict(**kargs): 
 

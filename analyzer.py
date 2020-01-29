@@ -1,7 +1,7 @@
 import pandas as pd 
 import numpy as np
 from pandas import DataFrame, Series
-import os
+import os, re, collections
 
 from sklearn.model_selection import train_test_split # Import train_test_split function
 from sklearn.svm import SVC
@@ -47,10 +47,15 @@ def summarize_loinc(codes, df=None, col="test_result_loinc_code", n=10, codebook
                 print("[{}] n={}".format(code, dfc.shape[0]))
     return
        
-def col_values(df, col='age', n=10):
-    df_subset = df.sample(n=n, random_state=1) # for each column, sample n values (usually n=1)
-    return df_subset[col].values
-sample_col_values = col_values
+def col_values(df, col='age', n=10, mode='sampling', random_state=1):
+
+    if mode.startswith('s'): 
+        return df.sample(n=n, random_state=random_state)[col].values
+    elif mode.startswith('u'):  # unique values
+        return df[col].unique()
+    return df.sample(n=n, random_state=random_state)[col].values
+def sample_col_values(df, col='age', n=10, random_state=1):
+    return col_values(df, col=col, n=n, random_state=random_state, mode='sampling')
 
 def interpret(df, n=1, verbose=2, save_uniq_vals=True, output_dir='', sep=','): 
     if df.empty:
@@ -107,7 +112,6 @@ def interpret(df, n=1, verbose=2, save_uniq_vals=True, output_dir='', sep=','):
         DataFrame(dvals).to_csv(output_path, sep=sep, index=False, header=True, float_format='%.3f') 
 
     return
-        
         
 def summarize_dataframe(df, n=1): 
     msg = ""
@@ -392,32 +396,6 @@ def analyze_path(X, y, model=None, p_grid={}, feature_set=[], n_trials=100, n_tr
             
     return paths, counts
 
-def load_data0(input_file, **kargs): 
-    """
-
-    Memo
-    ----
-    1. Example datasets
-
-        a. multivariate imputation applied 
-            exposures-4yrs-merged-imputed.csv
-        b. rows with 'nan' dropped 
-            exposures-4yrs-merged.csv
-
-    """
-    import collections
-    import data_processor as dproc
-
-    X, y, features = dproc.load_data(input_path=dataDir, input_file=input_file, sep=',') # other params: input_path/None
-
-    print("(load_data) dim(X): {}, sample_size: {}".format(X.shape, X.shape[0]))
-
-    counts = collections.Counter(y)
-    print("... class distribution | classes: {} | sizes: {}".format(list(counts.keys()), counts))
-    print("... variables: {}".format(features))
-
-    return X, y, features
-
 ### I/O Utilities ###
 
 def save_generic(df, cohort='', dtype='ts', output_file='', sep=',', **kargs):
@@ -471,6 +449,33 @@ def save_data(df, cohort='', output_file='', sep=',', **kargs):
     df.to_csv(output_path, sep=sep, index=False, header=True)
     if verbose: print("(save_data) Saved dataframe (dim={}) to:\n{}\n".format(df.shape, output_path))
     return
+
+def load_data0(input_file, **kargs): 
+    """
+
+    Memo
+    ----
+    1. Example datasets
+
+        a. multivariate imputation applied 
+            exposures-4yrs-merged-imputed.csv
+        b. rows with 'nan' dropped 
+            exposures-4yrs-merged.csv
+
+    """
+    import collections
+    import data_processor as dproc
+
+    X, y, features = dproc.load_data(input_path=dataDir, input_file=input_file, sep=',') # other params: input_path/None
+
+    print("(load_data) dim(X): {}, sample_size: {}".format(X.shape, X.shape[0]))
+
+    counts = collections.Counter(y)
+    print("... class distribution | classes: {} | sizes: {}".format(list(counts.keys()), counts))
+    print("... variables: {}".format(features))
+
+    return X, y, features
+
 def load_data(cohort='', input_file='', sep=',', **kargs):
     input_dir = kargs.get('input_dir', os.path.join(os.getcwd(), 'data'))
     
@@ -596,31 +601,14 @@ def label_by_performance(cohort='hepatitis-c', th_low =0.50, th_high = 0.90, cat
     return ccmap
 
 def load_loinc_table(input_dir='LoincTable', input_file='', **kargs):
-    from transformer import dehyphenate
     import loinc as ul
-
-    sep = kargs.get('sep', ',')
-    dehyphen = kargs.get('dehyphenate', False)
-
-    if not input_dir: input_dir = kargs.get('input_dir', "LoincTable") # os.path.join(os.getcwd(), 'result')
-    if not input_file: input_file = "Loinc.csv"
-    input_path = os.path.join(input_dir, input_file)
-    assert os.path.exists(input_path), "Invalid path: {}".format(input_path)
-
-    df = pd.read_csv(input_path, sep=sep, header=0, index_col=None, error_bad_lines=False)
-    print("> dim(table): {}".format(df.shape)) 
-
-    if dehyphen: 
-        col_key = ul.LoincTable.table_key_map.get(input_file, 'LOINC_NUM')
-        df = dehyphenate(df, col=col_key)  # inplace
-
-    return df
+    return ul.load_loinc_table(input_dir=input_dir, input_file=input_file, **kargs)
 
 def load_loinc_to_mtrt(input_file='loinc-leela.csv', **kargs):
+    # import loinc as ul
     sep = kargs.get('sep', ',')
     input_dir = kargs.get('input_dir', os.path.join(os.getcwd(), 'data'))
     df = load_generic(input_dir=input_dir, input_file=input_file, sep=sep) 
-
     return df
 
 def sample_df_values(df, cols=[], **kargs): 
@@ -936,12 +924,12 @@ def encode_labels(df, pos_label, neg_label=None, col_label='test_result_loinc_co
 ########################################
 # Data utilities
 
-def analyze_values(df, cols=[], verbose=1): 
+def analyze_values(df, cols=[], verbose=1, topn=10): 
     if not cols: cols = df.columns.values 
 
     adict = {}
     for i, col in enumerate(cols): 
-        mv = collections.Counter(df[col]).most_common(10)
+        mv = collections.Counter(df[col]).most_common(topn)
         mvz = [e[0] for e in mv]
         m = mv[0]
         mn, mc = m
@@ -983,8 +971,10 @@ def balance_by_downsampling(X, y, method='median', majority_max=3):
     """
     Params
     ------
-        majority_max: The sample size of the ajority class can at most be this multiple of the minority-class sample size
-                      e.g. suppose that majority_class = 3, then ... 
+        majority_max: The sample size of the majority class can be at most this multiple (of the minority class sample size)
+                      
+                        e.g. suppose that majority_class = 3, then the majority class sample size is at most 3 times as many as 
+                             the minority-class sample size
 
     """
     import pandas as pd
@@ -994,6 +984,7 @@ def balance_by_downsampling(X, y, method='median', majority_max=3):
     labels = np.unique(y)
     label_id = nf+1
     lcnt = collections.Counter(y) # label counts
+    print("balance_by_downsampling) nl: {}, labels: {} | nf={}".format(len(labels), labels, nf))
 
     lastn = 1
     Nmin = lcnt.most_common()[:-lastn-1:-1][0][1]
@@ -1005,6 +996,8 @@ def balance_by_downsampling(X, y, method='median', majority_max=3):
     else: 
         assert X.shape[0] == y.shape[0]
         X = np.hstack([X, y])
+
+    print("... After merging (X, y) => dim(X): {}".format(X.shape))
     
     ###########
     ts = DataFrame(X)
@@ -1021,7 +1014,8 @@ def balance_by_downsampling(X, y, method='median', majority_max=3):
         if tsl.shape[0] > Ncut:
             tx.append(tsl.sample(n=Ncut))
         else: 
-            tx.append(tsl) 
+            if not tsl.empty: 
+                tx.append(tsl) 
 
     if len(tx) > 0: 
         ts = pd.concat(tx, ignore_index=True) 
@@ -1034,7 +1028,7 @@ def balance_by_downsampling(X, y, method='median', majority_max=3):
 
 def balance_data_incr(df, df_extern, n_samples=-1, col='test_result_loinc_code', labels=[], verbose=1, **kargs):
     """
-    Similar to balance_data() but expect df2 to be huge (to a degree that may not fit into main memory)
+    Similar to balance_data() but expect df_extern to be huge (to a degree that may not fit into main memory)
     """
     import loinc as ul
 
@@ -1045,10 +1039,11 @@ def balance_data_incr(df, df_extern, n_samples=-1, col='test_result_loinc_code',
         n_baseline = int(np.median([e[1] for e in ds]))
     print("(balance_data_incr) n_baseline={}".format(n_baseline))
 
-    # target labels from the given 'col'
+    # labels: all the possible class labels (e.g. LOINC codes) read from 'col' (e.g. test_result_loinc_code)
     if len(labels) == 0: 
         labels = set(df[col])
 
+        # verify the external data
         if df_extern is not None or not df_extern.empty:
             labels_external = set(df_extern[col])
             print("(balance_data_incr) Found n={} unique codes from source | nc={} unique codes from external".format(
@@ -1201,21 +1196,6 @@ def balance_data(df, df2=None, n_samples=-1, col='test_result_loinc_code', label
 
 
 ########################################
-
-def t_performance(**kargs): 
-    from sklearn.datasets import load_iris
-
-    X, y = load_iris(return_X_y=True)
-
-    print("> before y:\n{}\n".format(y))
-    y = encode_labels(y, pos_label=1)
-
-    print("> after  y:\n{}\n".format(y))
-
-    scores = eval_performance(X, y, model=None, cv=5, random_state=53)
-    print("> average: {}, std: {}".format(np.mean(scores), np.std(scores)))
-
-    return scores
 
 def plot_barh(perf, metric='fmax', **kargs): 
     """
@@ -1384,9 +1364,24 @@ def t_io(**kargs):
     # MTRT dataframe / training data
     df = load_data(cohort=cohort, verbose=1)  # the original training data with relevant MTRT attributes
 
-    return 
+    return
 
-def t_analyze(**kargs):
+def t_performance(**kargs): 
+    from sklearn.datasets import load_iris
+
+    X, y = load_iris(return_X_y=True)
+
+    print("> before y:\n{}\n".format(y))
+    y = encode_labels(y, pos_label=1)
+
+    print("> after  y:\n{}\n".format(y))
+
+    scores = eval_performance(X, y, model=None, cv=5, random_state=53)
+    print("> average: {}, std: {}".format(np.mean(scores), np.std(scores)))
+
+    return scores 
+
+def t_performance_stats(**kargs):
     categories = ['easy', 'hard', 'low']  # low: low sample size
 
     ccmap = label_by_performance(cohort='hepatitis-c', categories=categories)
@@ -1561,35 +1556,87 @@ def t_loinc(**kargs):
 
     # empty strings 
 
+    return
+
+def inspect_col_values(df, cols, mode='unique', verbose=1):
+
+    adict = {}
+    msg = ""
+    for i, col in enumerate(cols): 
+        adict[col] = col_values(df, col=col, mode=mode)
+        msg += f"[{i}] {col}\n"
+        msg += "       + n={}: {{ {} }}\n".format(len(adict[col]), adict[col])
+    if verbose: 
+        print(msg)
+    
+    return adict
+
+def analyze_loinc_table(**kargs):
+    # from analyzer import load_loinc_table, sample_loinc_table
+    import loinc as lc
+    from loinc import LoincMTRT
+
+    cols_6p = ["COMPONENT","PROPERTY","TIME_ASPCT","SYSTEM","SCALE_TYP","METHOD_TYP"]   # CLASS
+    col_code = 'LOINC_NUM'
+
+    df_loinc = load_loinc_table(dehyphenate=True)
+    print("(loinc_table):\n{}\n".format(list(df_loinc.columns.values)))
+
+    # assert sum(1 for col in cols_6p if not col in df_loinc.columns) == 0  # ... ok
+    
+    codes_src = set(df_loinc[col_code].values)
+    print("(loinc_table) Number of unique loinc codes: {}".format( len(codes_src)) )
+
+    ### Q: what are all the possible values for earch of the the 6-part represention of LOINC codes? 
+    inspect_col_values(df_loinc, cols_6p, mode='unique', verbose=1)
+
+    ### long vs short names
+    cohort = 'hepatitis-c'
+    df_perf = load_performance(input_dir='result', cohort=cohort)
+    codes_low_sz = df_perf.loc[df_perf['mean'] < 0]['code'].values
+
+    D_loinc = lc.compare_short_long_names(df_loinc, codes=codes_low_sz, n_display=30, verbose=1)
+
+    ### mtrt vs long name 
+    # df_mtrt = LoincMTRT.load_loinc_to_mtrt(input_file='loinc-leela.csv')
+    D_mtrt = lc.compare_longname_mtrt(n_display=30, codes=codes_low_sz)
+    
+
+    return
+
+def analyze_data_set(**kargs):
+
+    # andromeda-pond-hepatitis-c-balanced.csv has illed-formed data
+
+    df= load_data(input_file='andromeda-pond-hepatitis-c.csv', warn_bad_lines=False)
+    summarize_dataframe(df, n=1)
+    print("-" * 50 + "\n")
+
+    target_cols = ['meta_sender_name', 'test_order_name', 'test_specimen_type', ]
+    print(f"(analyze_data_set) Inspecting {target_cols} ...")
+    inspect_col_values(df, target_cols, mode='unique', verbose=1)
 
     return
 
 def test(**kargs):
-    # input_dir = os.getcwd()
-    # input_file = "andromeda_dataset.csv"
-    # input_path = os.path.join(input_dir, input_file)
-    # df = pd.read_csv(input_path, sep=',', header=0)
- 
-    # msg = ""
-    # msg += "> sample sizes: {}\n".format(df.shape[0])
-    # msg += "> n(features):  {}\n".format(df.shape[1])
-    
-    # print(msg)
-
-    # t_performance(**kargs)
 
     ### I/O operations
     # t_io(**kargs)
 
-    ### Analysis 
-    # t_analyze(**kargs)
+    ### Analyze training data 
+    analyze_data_set()
 
     ### Stratigy training data 
-    t_stratify()   # ... ok 
+    # t_stratify()   # ... ok 
 
+    ### Predictive performance
+    # t_performance(**kargs)
+    # t_performance_stats(**kargs)
 
     ### LOINC codes analysis
     # t_loinc(**kargs)
+
+    # analyze_loinc_table()
 
 
     return

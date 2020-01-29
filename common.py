@@ -22,6 +22,27 @@ warnings.filterwarnings("ignore")
 #         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 
+# def levenshtein(a, b, mx=-1):    
+#     def result(d): return d if mx < 0 else False if d > mx else True
+ 
+#     if a == b: return result(0)
+#     la, lb = len(a), len(b)
+#     if mx >= 0 and abs(la - lb) > mx: return result(mx+1)
+#     if la == 0: return result(lb)
+#     if lb == 0: return result(la)
+#     if lb > la: a, b, la, lb = b, a, lb, la
+ 
+#     cost = array('i', range(lb + 1))
+#     for i in range(1, la + 1):
+#         cost[0] = i; ls = i-1; mn = ls
+#         for j in range(1, lb + 1):
+#             ls, act = cost[j], ls + int(a[i-1] != b[j-1])
+#             cost[j] = min(ls+1, cost[j-1]+1, act)
+#             if (ls < mn): mn = ls
+#         if mx >= 0 and mn > mx: return result(mx+1)
+#     if mx >= 0 and cost[lb] > mx: return result(mx+1)
+#     return result(cost[lb])
+
 def multiclass_roc_auc_score(y_test, y_pred, average="macro"):
     from sklearn.metrics import roc_auc_score
     from sklearn.preprocessing import LabelBinarizer
@@ -1554,6 +1575,20 @@ def t_utility(**kargs):
     unames, n_bags = infer_bag_count(names, sep='.', verify=False)
     print("(t_utility) names: {}, n_bags: {}".format(unames, n_bags))
 
+def t_distance(): 
+
+    ld = levenshtein
+    print(
+    ld('kitten','kitten'), # 0
+    ld('kitten','sitten'), # 1
+    ld('kitten','sittes'), # 2
+    ld('kitten','sityteng'), # 3
+    ld('kitten','sittYing'), # 4
+    ld('rosettacode','raisethysword'), # 8 
+    ld('kitten','kittenaaaaaaaaaaaaaaaaa'), # 17
+    ld('kittenaaaaaaaaaaaaaaaaa','kitten') # 17
+)
+
 def test(**kargs):
     ### reading datasets 
     # t_read()
@@ -1564,7 +1599,10 @@ def test(**kargs):
     # t_sampling()
 
     ### utilty functions 
-    t_utility()
+    # t_utility()
+
+    ### distance metric 
+    t_distance()
 
     return 
 

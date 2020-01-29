@@ -67,7 +67,7 @@ our disease-specific LOINC codes.
 This external data from non-target disease cohort are also, by default, assumed to be kept under `<project_dir>/loinc_predictor/data`
 
 
-**4. Loinc resources**: 
+**4. LOINC resources**: 
 
 Relevant files such as **LoincTable.csv**, MapTo.csv are expected to be read from: `<project_dir>/loinc_predictor/LoincTable`
 
@@ -78,7 +78,7 @@ Relevant files such as **LoincTable.csv**, MapTo.csv are expected to be read fro
 loinc_predictor/
 │
 ├── analyzer.py (main entry) 
-├── Analyzer.ipynb (main entry notebook)
+├── Analyzer.ipynb (main entry for notebook)
 ├── Learner.ipynb
 ├── ... 
 │

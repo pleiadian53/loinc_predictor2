@@ -39,7 +39,8 @@ def encode_vars(dfX, fset, high_card_cols=[], dfy=None, verbose=1):
         if var in low_card_cols: 
             encoder = ce.OneHotEncoder(cols=[var, ])
         elif var in high_card_cols: # categorical but with high cardinality
-            encoder = ce.BinaryEncoder(cols=[var, ])  # or use ce.HashingEncoder()
+            encoder = ce.BinaryEncoder(cols=[var, ])  
+            # ... or use ce.HashingEncoder()
 
         # data imputation
 
@@ -114,6 +115,59 @@ def to_age(df, col='patient_date_of_birth', new_col='age', add_new_col=True, thr
     else: 
         df.drop(col, axis=1, inplace=True)
         df['age'] = df[col].apply(lambda x: now.year-int(x))
+    return df
+
+def resolve_duplicate(df, cols=['test_result_loinc_code', ], add_count=True, col='count'): 
+    """
+    Count number of duplicate rows, add the count and drop
+
+    Memo
+    ----
+    1. other possible columns 
+       cols = ['test_result_name', 'test_order_name', ]
+       
+    """
+    import pandas as pd
+
+    # drop row-wise duplicates
+    n0 = df.shape[0]
+    df = df.drop_duplicates(keep='last')
+    n1 = df.shape[0]
+    print("(resolve_duplicate) Absolute duplicates | n0: {} =?= n1: {}".format(n0, n1))
+
+    if add_count: 
+        # df = df.groupby(list(df.columns)).size().reset_index(name=col)
+        # ... side effect: the ordering of the rows will change 
+
+        dfx = []
+        counts = []
+
+        if len(cols) == 0: 
+            # in this case, the notion of "duplicates" is ...
+            # ... established by the entire row (i.e. any two rows with exactly the same content are considered as duplicates)
+            cols = list(df.columns)
+        else: 
+            if isinstance(cols, str): 
+                cols = [cols, ]
+
+        for r, dfe in df.groupby(cols): 
+            count = dfe.shape[0]
+            counts.append(count)
+            dfe['count'] = count
+
+            dfx.append(dfe)
+
+        n = sum(1 for c in counts if c > 1)
+        # n0 = df.shape[0]
+        # n1 = df.drop_duplicates(subset=cols, keep='last').shape[0]
+        print("(resolve_duplicate) Found {} multiple instances wrt cols: {}".format(n, cols))
+
+        if len(dfx) > 0: 
+            df = pd.concat(dfx)# 
+            df.sort_index(inplace=True)
+        else: 
+            df['count'] = 1  # this should not happen
+
     return df
 
 def dehyphenate(df, col='test_result_loinc_code'): # 'LOINC_NUM'
@@ -206,9 +260,20 @@ def take(n, iterable):
     "Return first n items of the iterable as a list"
     return list(islice(iterable, n))
 
+def t_transformation(**kargs):
+    from analyzer import load_data
 
-def test(): 
-    
+    df = load_data(input_file='andromeda-pond-hepatitis-c.csv', warn_bad_lines=False)
+    print("> input dim(df): {}".format(df.shape))
+    df = resolve_duplicate(df)
+
+    return 
+
+def test(**kargs):
+
+    # test all the feature-transformation functions  
+    t_transformation()
+
     return
 
 if __name__ == "__main__": 
