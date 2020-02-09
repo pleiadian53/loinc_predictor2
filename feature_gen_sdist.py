@@ -25,8 +25,6 @@ from loinc import LoincTSet
 
 # ### Read in aggregate data & join with parsed/cleaned test name and specimen
 
-# In[2]:
-
 def build_cube():
     """
 
@@ -94,8 +92,6 @@ def build_cube():
 
 # ### Read in UMLS mapped names and put in data frame
 
-# In[3]:
-
 def compile_cuis(data):
     master_list = defaultdict(list)
     for i in range(data.shape[0]):
@@ -105,8 +101,6 @@ def compile_cuis(data):
             master_list[data.at[i, 'SourceTerm']].append(data.at[i, 'CUI'])
     return master_list
 
-
-# In[4]:
 
 def add_cuis_to_cube(dat):
     if config.print_status == 'Y':
@@ -579,8 +573,6 @@ def get_matches(data_col, loincmap, save=False):
     return match_matrix_LV, match_matrix_JW
 
 
-# In[11]:
-
 def concatenate_match_results0(input_matrix, dataType):
     n_rows = input_matrix.shape[0]
     n_cols = input_matrix.shape[1]
@@ -602,8 +594,6 @@ def concatenate_match_results(input_matrix, dataType, metric='JW'):
                 input_matrix.iloc[i, 0] = input_matrix.iloc[i, 0] + " " + input_matrix.iloc[i, j]
     col = LoincTSet.get_sdist_mapped_col_name(dataType, metric=metric)
     return pd.DataFrame(input_matrix.iloc[:, 0].values, index=input_matrix.index, columns=[col])
-
-# In[12]:
 
 def add_string_distance_features():
     joined_data = build_cube()
