@@ -920,6 +920,7 @@ def make_string_distance_features(df=None, dataType='test_order_name', loincmap=
 
             col = LoincTSet.get_sdist_mapped_col_name(dataType, metric="LV")
             term = df_transformed.at[i, col]  # [check] can be a non-string value???
+            if not isinstance(term, str): term = str(term)
 
             #----------------------------------
             # matches = stringdist.stringdist(df_transformed.at[i, 'TestNameMapLV'], unique_components, method='lv')
