@@ -2,6 +2,11 @@ import loinc as lc
 import os
 ##### Configuration settings ########
 
+## Data set configuration 
+cohort = domain = 'hepatitis-c'
+
+project_path = os.getcwd()
+analysis_path = os.path.join(project_path, 'analysis')
 ## This program assumes that you have collected raw laboratory data and aggregated it, grouping by [Lab Test Name, Specimen Type, Units, and LOINC code].
 ## Using the aggregated groups, the summary measures used as features in the algorithm include [Mean, Minimum, Maximum, 5th Percentile, 25th Percentile, 
 ## Median, 75th Percentile, 95th percentile, and Count]
@@ -9,12 +14,14 @@ import os
 
 ## Enter the directory where you would like the intermediate output files to be stored:
 ## Example: 'C:/Users/me/Documents/MyFiles/'
-out_dir = os.path.join(os.getcwd(), 'data')  # 'YOUR_DIRECTORY_HERE'
+out_dir = os.path.join(project_path, 'data')  # 'YOUR_DIRECTORY_HERE'
 # ... alternative LoincTable
 
 ## Enter the filepath where your raw source data file is located along with :
 ## Example: ## Example: 'C:/Users/me/Documents/MyFiles/Data.txt'
-in_file = os.path.join('data', 'andromeda-pond-hepatitis-c.csv') # 'YOUR_FILE_LOCATION_HERE'
+in_file = os.path.join('data', f'andromeda-pond-{cohort}.csv') # 'YOUR_FILE_LOCATION_HERE'
+processed_file = os.path.join('data', f'andromeda-pond-{cohort}-processed.csv')
+backup_file = os.path.join('data', f'andromeda-pond-{cohort}-bk.csv')
 ## ... other files: andromeda-pond-hepatitis-c.csv, andromeda-pond-hepatitis-c-balanced.csv
 ## ... note that "andromeda-pond-hepatitis-c-balanced.csv" may contain ill-formed meta_sender_name
 
@@ -50,6 +57,7 @@ write_file_umls_cuis = True
 ## Enter the full filepath to your local loinc.csv file installation:
 ## Example: 'C:/Users/me/Documents/MyFiles/loinc.csv'
 loinc_file_path = os.path.join('LoincTable', "Loinc.csv")  # lc.LoincTable.input_path or 'YOUR_LOINC_FILE_LOCATION'
+loinc_to_mtrt_file_path = os.path.join('data', )
 
 ## Enter the full filepath to your local R library file location (where stringdist package is installed)
 ## Example: 'C:/Program Files/R/R-3.4.1/library'
@@ -80,6 +88,9 @@ test_col = test_order_col = 'test_order_name'
 test_result_col = 'test_result_name'
 # ... alternative 
 #     test_result_name 
+test_value_col = 'test_result_value'
+
+test_comment_col = "test_result_comments"
 
 ## Enter the name of the column in your data source that contains the SPECIMEN TYPE (i.e. urine):
 spec_col = 'test_specimen_type' # 'YOUR_SPECIMEN_COL_NAME'
@@ -91,7 +102,7 @@ units = 'test_result_units_of_measure' #  'YOUR_UNITS_COL_NAME'
 
 ## Enter the name of the column in your data source that contains the LOINC CODE:
 loinc_col = 'test_result_loinc_code'  #  'YOUR_LOINC_COL_NAME'
-
+tagged_col = 'medivo_test_result_type'
 
 dtypes = {test_order_col: str, test_result_col: str, spec_col: str}
 

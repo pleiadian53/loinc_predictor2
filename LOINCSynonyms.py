@@ -1,15 +1,10 @@
-
 # coding: utf-8
-
-# In[1]:
-
 import pandas as pd
 import numpy as np
 from collections import defaultdict
 import config
 
 
-# In[2]:
 
 def group_func(group):
     if group.LOINC_NUM.count() >= 2:
@@ -17,8 +12,6 @@ def group_func(group):
 
 
 # #### Creates LOINC synonyms for terms with same Component, Property, Time Aspect, System, and Scale Type. 'Key' is the entry with null Method Type and Status == 'ACTIVE'
-
-# In[3]:
 
 def get_loinc_groups():
     if config.print_status == 'Y':
@@ -43,9 +36,6 @@ def get_loinc_groups():
     raw_loinc_mults['LOINC_KEY'] = np.nan
     
     return raw_loinc_mults
-
-
-# In[4]:
 
 def quant_nans(group):
     if group[group.METHOD_TYP.isnull()].shape[0] == 1:
@@ -77,8 +67,6 @@ def quant_nans(group):
     return group
 
 
-# In[3]:
-
 def get_loinc_synonyms():
     raw_loinc_mults = get_loinc_groups()
 
@@ -91,9 +79,6 @@ def get_loinc_synonyms():
     final_loinc_keys.to_csv(config.out_dir + 'loinc_synonymns.csv', index=False)
     
     return final_loinc_keys
-
-
-# In[ ]:
 
 
 

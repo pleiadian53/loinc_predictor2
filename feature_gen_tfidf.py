@@ -8,7 +8,10 @@ import common
 from sklearn.base import BaseEstimator, ClassifierMixin
 
 # local modules 
-from loinc import LoincMTRT as lmt
+# from loinc import LoincMTRT as lmt
+import loinc
+from loinc import LoincMTRT, LoincTable
+
 from CleanTextData import standardize 
 from collections import defaultdict, Counter
 
@@ -78,9 +81,9 @@ class MTRTClassifier(BaseEstimator, ClassifierMixin):
         Called when initializing the classifier
         """
         self.source_table = source_table
-        if not source_table: self.source_table = lmt.table
+        if not source_table: self.source_table = LoincMTRT.table
 
-        self.table = lmt.load_loinc_to_mtrt(dehyphenate=True, dequote=True) # input_file/LoincMTRT.table
+        self.table = LoincMTRT.load_loinc_to_mtrt(dehyphenate=True, dequote=True) # input_file/LoincMTRT.table
 
     def fit(self, X, y=None):
         """
@@ -118,7 +121,7 @@ def process_each(mtrt_str, code=''):
     def split_and_strip(s): 
         return ' '.join([str(e).strip() for e in s.split()])
     
-    header = lmt.header  # LoincMTRT
+    header = LoincMTRT.header  # LoincMTRT
     adict = {h:[] for h in header}
     adict[header[0]].append(str(code))
     adict[header[1]].append(mtrt_str)
@@ -309,7 +312,7 @@ def display(x, n_delimit=80):
     msg += "\n" + "#" * n_delimit
     return msg
 
-def process_tag(df=None, col='medivo_test_result_type', source_values=[], 
+def process_text_col(df=None, col='', source_values=[], 
                    add_derived=True, remove_slot=True, clean=True, standardized=True, save=False, 
                    transformed_vars_only=True, **kargs): 
     """
@@ -331,37 +334,27 @@ def process_tag(df=None, col='medivo_test_result_type', source_values=[],
 
     if len(source_values) > 0: 
         transformed_vars_only = True
+        if not col: col = 'processed'
     else: 
         assert df is not None, "Both input dataframe (df) and source values were not given!"
         source_values = df[col].values
 
     # preprocess source value to ensure that all values are of string type
-    source_values_processed = []
-    n_null = n_numeric = 0
-    token_default = ''
-    for source_value in source_values: 
-        if pd.isna(source_value): 
-            source_values_processed.append(token_default)
-            n_null += 1
-        elif isinstance(source_value, (int, float, )): 
-            n_numeric += 1
-            source_values_processed.append(str(source_value))
-        else: 
-            source_values_processed.append(source_value.strip())
-    source_values = source_values_processed
+    source_values = preproces_source_values(source_values=source_values, value_default="")
 
     if transformed_vars_only: 
         df = DataFrame(source_values, columns=[col, ])  
     else: 
         # noop
-        df[col] = source_values # fill the processed source values 
+        assert df is not None
+        df[col] = source_values # overwrite the column values
     
     # preprocess dataframe 
     # token_default = ''
     # df[col] = df[col].fillna(token_default)
 
     # brackets
-    print("(process_tag) Extracting measurement units (i.e. [...]) ... ")
+    print("(process_text_col) Extracting measurement units (i.e. [...]) ... ")
     cols_target = [col, "unit"]
     col_derived = 'unit'
     bracketed = []
@@ -378,7 +371,7 @@ def process_tag(df=None, col='medivo_test_result_type', source_values=[],
         b, e = doc.find("["), doc.find("]")
         if b > 0: 
             if not e > b: 
-                print("(process_tag) Weird doc (multiple [])? {}".format(doc))
+                print("(process_text_col) Weird doc (multiple [])? {}".format(doc))
                 # n_malformed += 1
                 malformed.append(doc)
                 bracketed.append(token_default)
@@ -390,19 +383,20 @@ def process_tag(df=None, col='medivo_test_result_type', source_values=[],
     null_rows = set(null_rows)
 
     # df[col_derived] = df[col].apply(re.search(r'\[(.*?)\]',s).group(1))
-    if add_derived: df[col_derived] = bracketed
+    if add_derived: 
+        df[col_derived] = bracketed
 
     dft = df[df[col].str.contains("\[.*?\]")]
     target_index = dft.index
-    print("(process_tag)  Malformed []-terms (n={}):\n{}\n".format(len(malformed), display(malformed)))
-    print("(process_tag) After extracting unit (doc type: {}) | n(has []):{}, n(malformed): {} ...\n{}\n".format(docType, 
+    print("(process_text_col) Malformed []-terms (n={}):\n{}\n".format(len(malformed), display(malformed)))
+    print("(process_text_col) After extracting unit (doc type: {}) | n(has []):{}, n(malformed): {} ...\n{}\n".format(docType, 
         dft.shape[0], len(malformed),
         tabulate(dft[cols_target].head(20), headers='keys', tablefmt='psql')))
 
     # now we don't need []
     if remove_bracket: 
         df[col] = df[col].str.replace("\[.*?\]", '')
-        print("(process_tag) after removing brackets:\n{}\n".format(tabulate(df.iloc[target_index][cols_target].head(20), headers='keys', tablefmt='psql')))
+        print("(process_text_col) After removing brackets:\n{}\n".format(tabulate(df.iloc[target_index][cols_target].head(20), headers='keys', tablefmt='psql')))
 
     ########################################################
 
@@ -429,7 +423,7 @@ def process_tag(df=None, col='medivo_test_result_type', source_values=[],
     p_context_by = re.compile(r"by\s+(?P<compound>([-+a-zA-Z0-9,']+)(\s+[-a-zA-Z0-9,']+)*)\s+\((?P<abbrev>.*?)\)")
     ########################################################
     
-    print("(process_tag) Extracting compounds and their abbreviations ... ")
+    print("(process_text_col) Extracting compounds and their abbreviations ... ")
     cols_target = [col, "compound", "abbrev"]
     token_default = ""
     n_null = n_malformed = 0
@@ -444,7 +438,7 @@ def process_tag(df=None, col='medivo_test_result_type', source_values=[],
         tHasMatch = False
         if b > 0: 
             if not (e > b): 
-                print("(process_tag) Weird doc (multiple parens)? {}".format(doc))
+                print("(process_text_col) Weird doc (multiple parens)? {}".format(doc))
                 # e.g. MTRT: Functional Assessment of Incontinence Therapy - Fecal Questionnaire - version 4 ( [FACIT]
                 #      missing closing paran
                 abbreviations.append(token_default)
@@ -500,7 +494,6 @@ def process_tag(df=None, col='medivo_test_result_type', source_values=[],
             compounds.append(token_default)
 
             # doc: no change
-
         else:
             if remove_paran: 
                 doc = re.sub('\(.*?\)', '', doc)
@@ -516,8 +509,8 @@ def process_tag(df=None, col='medivo_test_result_type', source_values=[],
 
     dft = df[df[col].str.contains("\(.*?\)")]
     target_index = dft.index
-    print("(process_tag Malformed ()-terms (n={}):\n{}\n".format(len(malformed), display(malformed)))
-    print("(process_tag) After extracting 'compound' & 'abbreviation' (doc type: {}) | n(has_paran):{}, n(malformed):{} ...\n{}\n".format(
+    print("(process_text_col Malformed ()-terms (n={}):\n{}\n".format(len(malformed), display(malformed)))
+    print("(process_text_col) After extracting 'compound' & 'abbreviation' (doc type: {}) | n(has_paran):{}, n(malformed):{} ...\n{}\n".format(
         docType, dft.shape[0], len(malformed),
         tabulate(dft[cols_target][[col, col_abbrev]].head(200), headers='keys', tablefmt='psql')))
     # complex cases: 
@@ -525,11 +518,11 @@ def process_tag(df=None, col='medivo_test_result_type', source_values=[],
 
     if remove_paran:
         df[col] = df[col].str.replace("\(.*?\)", '')
-        print("(extract) After removing parens:\n{}\n".format(tabulate(df.iloc[target_index][cols_target].head(200), headers='keys', tablefmt='psql')))
+        print("(process_text_col) After removing parens:\n{}\n".format(tabulate(df.iloc[target_index][cols_target].head(200), headers='keys', tablefmt='psql')))
     # df[col] = new_docs
     ########################################################
 
-    print("(process_tag) Extracting Postscript ... ")
+    print("(process_text_col) Extracting Postscript ... ")
     cols_target = [col, "note"]
     col_derived = 'note'
     token_default = ""
@@ -547,7 +540,7 @@ def process_tag(df=None, col='medivo_test_result_type', source_values=[],
     df[col_derived] = notes
 
     dft = df[df[col].str.contains("--.*")]
-    print("(process_tag) After extracting additional info (PS) [doc type: {}] | n(has PS): {} ... \n{}\n".format(
+    print("(process_text_col) After extracting additional info (PS) [doc type: {}] | n(has PS): {} ... \n{}\n".format(
         docType, dft.shape[0], tabulate(dft[cols_target].head(50), headers='keys', tablefmt='psql')))
 
     if remove_slot: 
@@ -596,7 +589,7 @@ def clean_mtrt(df=None, col_target='medivo_test_result_type', **kargs):
     #######################################
     # --- generic parameters
     cohort = kargs.get('cohort', 'hepatitis-c')    
-    col_key = kargs.get('col_key', lmt.col_key) # 'Test Result LOINC Code'
+    col_key = kargs.get('col_key', LoincMTRT.col_key) # 'Test Result LOINC Code'
     save = kargs.get('save', True)
     verbose = kargs.get('verbose', 1)
     sep = kargs.get('sep', ',')
@@ -606,12 +599,12 @@ def clean_mtrt(df=None, col_target='medivo_test_result_type', **kargs):
 
     if df is None: 
         col_target = ''
-        # df = lmt.load_loinc_to_mtrt(dehyphenate=True, dequote=True) # input_file/LoincMTRT.table
+        # df = LoincMTRT.load_loinc_to_mtrt(dehyphenate=True, dequote=True) # input_file/LoincMTRT.table
 
         # default: load source data (training data)
         df = load_src_data(cohort=cohort, warn_bad_lines=False, canonicalized=True, processed=True)
 
-    # df = process_tag(df, col='medivo_test_result_type', add_derived=False, save=False)
+    # df = process_text_col(df, col='medivo_test_result_type', add_derived=False, save=False)
 
     site = config.site
     new_values = []
@@ -633,12 +626,212 @@ def clean_mtrt(df=None, col_target='medivo_test_result_type', **kargs):
     
     return df
 
-def parallel_features_loinc_vs_mtrt(df_src=None, df_loinc=None, df_mtrt=None, **kargs): 
-    """
-    Use source texts to train a TD-IDF model
+def expand_by_longname(df, col_src='test_result_loinc_code', 
+                col_derived='test_result_loinc_longname', df_ref=None, transformed_vars_only=False, dehyphenate=True):
+    # from loinc import LoincMTRT, LoincTable
+    # --- LOINC table attributes
+    col_ln, col_sn = LoincTable.long_name, LoincTable.short_name
+    col_lkey = LoincTable.col_key
+    ##################################
+    # --- Loinc to MTRT attributes (from Leela)
+    col_mval = LoincMTRT.col_value
+    col_mkey = LoincMTRT.col_key    # loinc codes in the mtrt table
+    # df_ref = merge_mtrt_loinc_table(target_cols=[col_lkey, col_ln, col_mval]) # df_mtrt=None, df_loinc=None, dehyphenate=True, target_cols=[]
+    
+    if df_ref is None: df_ref = loinc.load_loinc_table(dehyphenate=dehyphenate)
+    
+    # consider the following LOINC codes
+    uniq_codes = df[col_src].unique()
+    df_ref = df_ref.loc[df_ref[col_lkey].isin(uniq_codes)][[col_lkey, col_ln]]
+    
+    if transformed_vars_only: 
+        return df_ref
 
-    i) MTRT: leela 
-    ii) LOINC: LOINC table
+    df = pd.merge(df, df_ref, left_on=col_src, right_on=col_lkey, how='left').drop([col_lkey], axis=1)
+    df.rename({col_ln: col_derived}, axis=1, inplace=True)
+
+    return df
+
+def merge_mtrt_loinc_table(df_mtrt=None, df_loinc=None, dehyphenate=True, target_cols=[]):
+    # from loinc import LoincMTRT, LoincTable
+
+    # --- LOINC table attributes
+    col_ln, col_sn = LoincTable.long_name, LoincTable.short_name
+    col_lkey = LoincTable.col_key
+    ##################################
+    # --- Loinc to MTRT attributes (from Leela)
+    col_mval = LoincMTRT.col_value
+    col_mkey = LoincMTRT.col_key    # loinc codes in the mtrt table
+
+    if df_mtrt is None: df_mtrt = LoincMTRT.load_loinc_to_mtrt(dehyphenate=dehyphenate) 
+    if df_loinc is None: df_loinc = loinc.load_loinc_table(dehyphenate=dehyphenate)
+
+    # codeSet = set(df_loinc[col_lkey].values).union(df_mtrt[col_mkey])
+    
+    df = pd.merge(df_loinc, df_mtrt, left_on=col_lkey, right_on=col_mkey, how='left').drop([col_mkey,], axis=1).fillna('') 
+    if len(target_cols) > 0: 
+        return df[target_cols]
+
+    return df
+def get_corpora_from_merged_loinc_mtrt(df_mtrt=None, df_loinc=None, target_cols=[], dehyphenate=True, sep=" ", remove_dup=True): 
+    import transformer as tr
+    # from loinc import LoincMTRT, LoincTable
+
+    # --- LOINC table attributes
+    col_ln, col_sn = LoincTable.long_name, LoincTable.short_name
+    # col_lkey = LoincTable.col_key
+    ##################################
+    # --- Loinc to MTRT attributes (from Leela)
+    col_mval = LoincMTRT.col_value
+    # col_mkey = LoincMTRT.col_key    # loinc codes in the mtrt table
+
+    df_merged = merge_mtrt_loinc_table(df_mtrt=df_mtrt, df_loinc=df_loinc, dehyphenate=dehyphenate)
+
+    if not target_cols: target_cols = [col_sn, col_ln, col_mval]
+    corpora = tr.conjoin(df_merged, cols=target_cols, transformed_vars_only=True, sep=sep, remove_dup=remove_dup)
+    return corpora
+
+def tfidf_pipeline(corpora=[], df_src=None, target_cols=[], **kargs):
+    """
+    Build a TF-IDF model based on the input corpus
+    
+    Flow
+    ----
+    1. define corpus given the source data
+    2. train model
+    
+    """
+    import language_model as lm
+    import transformer as tr
+  
+    dehyphenate = kargs.get('dehyphenate', True)
+    ##################################
+    # --- training data attributes
+    col_code = 'test_result_loinc_code'
+    col_mtrt = 'medivo_test_result_type'
+    ##################################
+    # --- LOINC table attributes
+    col_ln, col_sn = LoincTable.long_name, LoincTable.short_name
+    col_lkey = LoincTable.col_key
+    ##################################
+    # --- Loinc to MTRT attributes (from Leela)
+    col_mval = LoincMTRT.col_value
+    col_mkey = LoincMTRT.col_key
+
+    # --- define training corpus
+    # A. user-provided corpus extracted from columns of the dataframe 
+    col_new = 'conjoined'
+
+    source_values = corpora  # here "source values" is the training corpus
+    if len(source_values) > 0: 
+        n = len(source_values)
+        assert np.all([isinstance(val, str) for val in np.random.choice(source_values, min(n, 10))])
+
+        dfp = process_text_col(source_values=source_values, col=col_new, add_derived=False, 
+                        remove_slot=False,  # remove a given concept from the text? (e.g. if [<unit>] found, then remove [<unit>] from the text)
+                        clean=True, standardized=True, save=False, doc_type='training data', transformed_vars_only=True)
+        source_values = dfp[col_new].values
+    elif df_src is not None: 
+        assert len(target_cols) > 0, "Target columns must be specified to extract corpus from a dataframe."
+        source_values = np.array([])
+        
+        # e.g. conjoining test_order_name, test_result_name
+        conjoined = tr.conjoin(df, cols=target_cols, transformed_vars_only=True, sep=" ")
+        dfp = process_text_col(source_values=conjoined, col=col_new, add_derived=False, 
+                        remove_slot=False,  # remove a given concept from the text? (e.g. if [<unit>] found, then remove [<unit>] from the text)
+                        clean=True, standardized=True, save=False, doc_type='training data', transformed_vars_only=True)
+        # source_values = np.hstack( [source_values, dfp[col_new].values] ) 
+        source_values = dfp[col_new].values
+    else:  
+        # default to use LOINC field and MTRT as the source corpus
+        print("(tfidf_pipeline) Use LOINC field and MTRT as the source corpus by default.")
+
+        # B. Using LOINC LN and MTRT as corpus
+        df_mtrt = kargs.get('df_mtrt', None)
+        df_loinc = kargs.get('df_loinc', None)
+        if df_mtrt is None: df_mtrt = LoincMTRT.load_loinc_to_mtrt(dehyphenate=dehyphenate) 
+        if df_loinc is None: df_loinc = loinc.load_loinc_table(dehyphenate=dehyphenate)
+
+        # add external training data 
+        # [todo]
+
+        # [analysis]
+        #    1. does PS appear in the long names? Yes
+        ################################################################
+        # df_mtrt_ps = df_mtrt[df_mtrt[col_mval].str.contains("--.*")]
+        # codes_ps = df_mtrt_ps[col_mkey]
+        # loinc_table = get_loinc_values(codes_ps, target_cols=[col_ln, col_sn, ], df_loinc=None, dehyphenate=True)
+
+        # adict = {}
+        # adict[col_mkey] = codes_ps
+        # adict[col_ln] = loinc_table[col_ln]
+        # adict[col_mval] = df_mtrt_ps[col_mval]
+        # df_temp = DataFrame(adict) 
+        # print("(parallel) Longnames for PS-present MTRTs:\n{}\n".format(df_temp.head(20)))
+        ################################################################
+        
+        # -- load derived MTRT table
+        # df_map = LoincMTRT.load_derived_loinc_to_mtrt()
+        # columns: Test Result LOINC Code | Medivo Test Result Type | unit | compound | abbrev | note
+
+        # now focus on loinc code and longname or MTRT strings only
+
+        conjoined = get_corpora_from_merged_loinc_mtrt(df_mtrt=df_mtrt[[col_mkey, col_mval]], 
+                            df_loinc=df_loinc[[col_lkey, col_sn, col_ln]], target_cols=[col_sn, col_ln, col_mval], 
+                               dehyphenate=True, sep=" ", remove_dup=True)
+        assert len(conjoined) == df_loinc.shape[0]
+
+        dfp = process_text_col(source_values=conjoined, col=col_new, add_derived=False, 
+                        remove_slot=False,  # remove a given concept from the text? (e.g. if [<unit>] found, then remove [<unit>] from the text)
+                        clean=True, standardized=True, save=False, doc_type='training data', transformed_vars_only=True)  # transformed_vars_only/True
+        print("(model) Processed conjoined loinc LN and MTRT:\n{}\n".format(df_loinc_p.head(30)))
+
+
+        # [analysis]
+        ################################################################
+        # ccmap = label_by_performance(cohort='hepatitis-c', categories=['easy', 'hard', 'low'])
+        # codes_lsz = ccmap['low']
+        # compare_longname_mtrt(df_mtrt=df_mtrt_p, df_loinc=df_loinc_p, codes=codes_lsz)
+        ################################################################
+        # ... for the most part, they are almost identical
+
+        # use the combined source values as the corpus
+        source_values = dfp[col_new].values
+    #######################################################
+    # ... now we have the source corpus ready
+
+    # preproces_source_values(source_value=source_values, value_default=value_default)
+    print("... n={} source values".format( len(source_values) ))
+
+    # model, mydict, corpus = build_tfidf_model(source_values=source_values)
+    model = lm.build_tfidf_model(source_values=source_values, standardize=False)
+    return model
+
+def gen_sim_features_matching_candidates(codes=[], value_default=0.0):
+
+    # --- LOINC table attributes
+    col_ln, col_sn = LoincTable.long_name, LoincTable.short_name
+    col_lkey = LoincTable.col_key
+    ##################################
+    # --- Loinc to MTRT attributes (from Leela)
+    col_mval = LoincMTRT.col_value
+    col_mkey = LoincMTRT.col_key    # loinc codes in the mtrt table
+
+    df = merge_mtrt_loinc_table() # df_mtrt/None, df_loinc/None, dehyphenate/True, target_cols/[]     
+    df = df.loc[df[col_lkey].isin(codes)]
+
+    return 
+
+def gen_sim_features(df=None, target_cols=[], model=None, **kargs): 
+    """
+    Use a source corpus to train a TD-IDF model. Given this model
+    convert target_cols (e.g. test_order_name) into vector forms and 
+    then compute their similarities with respect to either LOINC LN or MTRT:  
+
+    i) MTRT: obtained from leela 
+    ii) LOINC Long Name (LN): obtained from LOINC table
+
+    MTRT takes precedence over LOINC LN. 
 
     Params
     ------
@@ -658,9 +851,18 @@ def parallel_features_loinc_vs_mtrt(df_src=None, df_loinc=None, df_mtrt=None, **
     """
     from loinc import LoincTable, LoincMTRT, get_loinc_values, load_loinc_table, compare_longname_mtrt
     from analyzer import label_by_performance   # analysis only
+    import transformer as tr
+    # from scipy.spatial import distance # cosine similarity
+    from sklearn.metrics.pairwise import linear_kernel  
+    # from transformer import preproces_source_values
 
     verbose = kargs.get('verbose', 1)
-    transformed_vars_only = kargs.get('transformed_vars_only', 1)
+    cohort = kargs.get('cohort', 'hepatitis-c')  # used to index into the desired dataset
+    transformed_vars_only = kargs.get('transformed_vars_only', True)
+    value_default = kargs.get('value_default', "")
+    model = kargs.get('model', None)
+    join_target_cols = kargs.get('join_target_cols', False)
+    # col_conjoined = kargs.get('col_conjoined', tr.join_feature_names(target_cols, sep='_')) # name of the new column that combines 'target_cols'
     ##################################
     # --- training data attributes
     col_code = 'test_result_loinc_code'
@@ -674,99 +876,73 @@ def parallel_features_loinc_vs_mtrt(df_src=None, df_loinc=None, df_mtrt=None, **
     col_mval = LoincMTRT.col_value
     col_mkey = LoincMTRT.col_key
 
-    if df_src is None: 
+    if len(train_cols) == 0: train_cols = [col_code, col_mtrt, ]
+
+    # --- TF-IDF model
+    if model is None: 
+        source_values = kargs.get('source_values', [])
+        #---------------------------------------------
+        df_train = kargs.get('df_train', None)  # training corpus
+        train_cols = kargs.get('train_cols', [])
+        #---------------------------------------------
+        # ... source_values takes precedence over df_train 
+
+        assert (len(source_values) > 0) or (df_train is not None and 
+            len(train_cols) > 0 and np.all([col in df_train.columns for col in train_cols]))
+
+        # if df_train is None, then will default to use LOINC fields (longnames, shortnames) and MTRTs combined as a training corpus
+        model = tfidf_pipeline(corpora=source_values, df_src=df_train, target_cols=train_cols)
+
+    if df is None: 
         # load the original data, so that we can use the punctuation info to extract concepts (e.g. measurements are specified in brackets)
         isProcessed = False
-        df_src = load_src_data(cohort=cohort, warn_bad_lines=False, canonicalized=True, processed=isProcessed)
+        df = load_src_data(cohort=cohort, warn_bad_lines=False, canonicalized=True, processed=isProcessed)
 
-    target_cols = [col_code, col_mtrt, ]
-    assert np.all([col in df_src.columns for col in target_cols]), "Missing some columns (any of {}) in the input".format(target_cols)
-    ############################################################################
-    # ... source representation
-    mtrts = df_src[col_mtrt].values
-    input_mtrt = process_tag(source_values=mtrts, col='', add_derived=True, remove_slot=False, 
-                            clean=True, standardized=True, save=False, doc_type='training data (MTRT)') # transformed_vars_only/True 
+    # assert np.all([col in df.columns for col in target_cols]), "Missing some columns (any of {}) in the input".format(target_cols)
+    ###########################################################################
 
-    codes = df_src[col_code].values
-    loinc_table = get_loinc_values(codes, target_cols=[col_ln, col_sn, ], df_loinc=None, dehyphenate=True)
-    input_loinc = process_tag(source_values=loinc_table[col_ln], add_derived=True, 
-                            remove_slot=False,  # remove a given concept from the text? (e.g. if [<unit>] found, then remove [<unit>] from the text)
-                            clean=True, standardized=True, save=False, doc_type='training data (LN)') # transformed_vars_only/True
-    print("(parallel) Size of input: {} =?= {}".format(len(input_mtrt), len(input_loinc)))
-    print("(parallel) Processed input data loinc LNs:\n{}\n".format(input_loinc.head(30)))
-    print("(parallel) Processed input MTRTs:\n{}\n".format(input_mtrt.head(30)))
-    ############################################################################
+    if not target_cols: target_cols = ['test_order_name', 'test_result_name', ] 
 
-    header = ['d_tfidf_loinc_to_mtrt', 'd_jw_unit', 'd_jw_compound']
+    if join_target_cols:
+        col_conjoined = kargs.get('col_conjoined', tr.join_feature_names(target_cols, sep='_')) # name of the new column that combines 'target_cols'
+        conjoined = tr.conjoin(df, cols=target_cols, transformed_vars_only=True, sep=" ")
+        Xr = model.transform(conjoined)
+        N = Xr.shape[0]
+        assert df.shape[0] == N
+        
+        df = df.fillna("")
+        
+        # now compute cosine similarity wrt LOINC LN, and MTRT
+
+        for target_col in ref_cols: 
+            Xt = model.transform(df[target_col].values)
+            assert Xr.shape[0] == Xt.shape[0]
+            # for i in range(N):
+            #     # r = 1.0-distance.cosine(Xr[i], Xt[i])
+            #     r = linear_kernel(Xr[i], Xt[i]).flatten()
+            #     sim_values.append(r)
+            sim_values = np.diag(linear_kernel(Xr, Xt))
+
+
+    # -- do pairwise comparison
+    header = ['d_tfidf_loinc_to_mtrt', ] # 'd_jw_unit', 'd_jw_compound']
+    # df['col_3'] = df.apply(lambda x: f(x.col_1, x.col_2), axis=1)
+
     if transformed_vars_only: 
         # columns(derived df_mtrt): Test Result LOINC Code, Medivo Test Result Type, unit, compound, abbrev, note
         df_output = DataFrame(columns=header)
     else: 
         df_incr = DataFrame(columns=header)
         df_output = pd.concat([df_src, df_incr], axis=1)
+    col_key = kargs.get('col_key', LoincMTRT.col_key) # 'Test Result LOINC Code'
 
-    col_key = kargs.get('col_key', lmt.col_key) # 'Test Result LOINC Code'
-    if df_mtrt is None: df_mtrt = LoincMTRT.load_loinc_to_mtrt(dehyphenate=True) 
-    if df_loinc is None: df_loinc = load_loinc_table(dehyphenate=True)
+    # --- transform loinc field and MTRT field in the training data
+    assert input_loinc.shape[0] == input_mtrt.shape[0]
+    loinc_values = input_loinc[col_lkey].values
+    X_loinc = model.transform(loinc_values)
 
-    # [analysis]
-    #    1. does PS appear in the long names? Yes
-    ################################################################
-    # df_mtrt_ps = df_mtrt[df_mtrt[col_mval].str.contains("--.*")]
-    # codes_ps = df_mtrt_ps[col_mkey]
-    # loinc_table = get_loinc_values(codes_ps, target_cols=[col_ln, col_sn, ], df_loinc=None, dehyphenate=True)
-
-    # adict = {}
-    # adict[col_mkey] = codes_ps
-    # adict[col_ln] = loinc_table[col_ln]
-    # adict[col_mval] = df_mtrt_ps[col_mval]
-    # df_temp = DataFrame(adict) 
-    # print("(parallel) Longnames for PS-present MTRTs:\n{}\n".format(df_temp.head(20)))
-    ################################################################
-    
-    # -- load derived MTRT table
-    # df_map = LoincMTRT.load_derived_loinc_to_mtrt()
-    # columns: Test Result LOINC Code | Medivo Test Result Type | unit | compound | abbrev | note
-
-    # now focus on loinc code and longname or MTRT strings only 
-    df_loinc = df_loinc[[col_lkey, col_ln, col_sn]]
-    df_mtrt = df_mtrt[[col_mkey, col_mval]] 
-
-    df_loinc_p = process_tag(df=df_loinc, col=col_ln, add_derived=True, 
-                               remove_slot=False,  # remove a given concept from the text? (e.g. if [<unit>] found, then remove [<unit>] from the text)
-                               clean=True, standardized=True, save=False, doc_type='loinc table (LN)', transformed_vars_only=False)  # transformed_vars_only/True
-    print("(parallel) Processed loinc LNs:\n{}\n".format(df_loinc_p.head(30)))
-    
-    # ... processed df_loinc 
-    df_mtrt_p = process_tag(df=df_mtrt, col=col_mval, add_derived=True, 
-                            remove_slot=False, 
-                            clean=True, standardized=True, save=False, doc_type='leela mapping (MTRT)', transformed_vars_only=False)
-    print("(parallel) Processed MTRTs:\n{}\n".format(df_mtrt_p.head(30)))
-
-    # [analysis]
-    ################################################################
-    # ccmap = label_by_performance(cohort='hepatitis-c', categories=['easy', 'hard', 'low'])
-    # codes_lsz = ccmap['low']
-    # compare_longname_mtrt(df=df_mtrt_p, df_loinc=df_loinc_p, codes=codes_lsz)
-    ################################################################
-    # ... for the most part, they are almost identical
-
-    # use the combined source values as the corpus
-    n_offset = df_loinc_p.shape[0]
-    source_values = np.hstack( [ df_loinc_p[col_ln].values, df_mtrt_p[col_mval].values] )
-    print("... n={} source values".format( len(source_values) ))
-    model, mydict, corpus = build_tfidf_model(source_values=source_values)
-
-    # Show the TF-IDF weights
-    # for doc in model[corpus]:
-    #     print([[mydict[id_], np.around(freq, decimals=2)] for id_, freq in doc])
-    
-    # --- Compute d_tfidf_loinc_to_mtrt
-    print("... n(mydict): {}, size(corpus): {}".format(len(mydict), len(corpus)))
-    # ... n(mydict) ~ # of unique tokens in the corpus
-    #     size(corpus) ~ size(source_values)
-
-    vector = model[corpus[0]]
+    mtrt_values = input_mtrt[col_mval].values
+    X_mtrt = model.transform(mtrt_values)
 
 
     return 
@@ -794,8 +970,8 @@ def predict_by_mtrt(mtrt_str='', target_code=None, df=None, **kargs):
     """
     from loinc import LoincMTRT
 
-    col_key = kargs.get('col_key', lmt.col_key) # 'Test Result LOINC Code'
-    if df is None: df = lmt.load_loinc_to_mtrt(dehyphenate=True, dequote=True) # input_file/LoincMTRT.table
+    col_key = kargs.get('col_key', LoincMTRT.col_key) # 'Test Result LOINC Code'
+    if df is None: df = LoincMTRT.load_loinc_to_mtrt(dehyphenate=True, dequote=True) # input_file/LoincMTRT.table
     
     # verify 
     for code in df['Test Result LOINC Code'].values: 
@@ -926,13 +1102,28 @@ def demo_create_tfidf_vars(**kargs):
     df_src = dfp.loc[dfp[col_target].isin(target_codes)]
     print("(demo) dim(input): {}".format(df_src.shape))
 
-    parallel_features_loinc_vs_mtrt(df_src=df_src, df_loinc=None, df_map=None, transformed_vars_only=True, verbose=1) 
+    gen_sim_features(df_src=df_src, df_loinc=None, df_map=None, transformed_vars_only=True, verbose=1) 
 
     return
         
 def demo_experta(**kargs):
     from random import choice
     # from experta import *
+
+    return
+
+def demo_loinc_mtrt(): 
+    from analyzer import compare_col_values, load_src_data
+    cohort = "hepatitis-c"
+
+    df = load_src_data(cohort=cohort, warn_bad_lines=False, canonicalized=True, processed=True)
+    dim0 = df.shape
+    df = expand_by_longname(df, col_src='test_result_loinc_code', 
+           col_derived='test_result_loinc_longname', df_ref=None, transformed_vars_only=False, dehyphenate=True)
+    print("(demo) dim0: {} => dim(df): {}, col(df):\n{}\n".format(dim0, df.shape, df.columns.values))
+
+    cols = ['test_result_loinc_longname', 'medivo_test_result_type',]
+    compare_col_values(df, cols=cols, n=10, mode='sampling', verbose=1, random_state=53)
 
     return
 
@@ -946,9 +1137,10 @@ def test(**kargs):
 
     ### Parsing, cleaing, standardizing 
     # demo_parse()
+    demo_loinc_mtrt()
 
     #--- Text feature generation
-    demo_create_tfidf_vars()
+    # demo_create_tfidf_vars()
 
     #--- Basic LOINC Prediction
     # demo_predict()

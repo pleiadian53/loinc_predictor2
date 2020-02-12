@@ -3,8 +3,10 @@ import numpy as np
 from pandas import DataFrame, Series
 import os, re, collections
 
+# test strings non-mapping list 
+non_mapping_list = ['SIEMENS', ]
 
-def prepare_data(input_dir='data', sep='|', dtype='wikipedia'): 
+def prepare_data(input_dir='data', sep=',', dtype='wikipedia'): 
     """
 
 
@@ -35,18 +37,29 @@ DEFINITIONS IN BIOMEDICAL TEXT:
 
     return
 
-def t_acronym_lookup(input_dir='data'):
+def demo_acronym_lookup(input_dir='data', sep=','):
     delimit = '|'
     # run prepare_data() to generate 'wikipedia-acronyms.csv'
     # prepare_data()
-    
-    input_path = os.path.join(input_dir, 'wikipedia-acronyms.csv')
-    if not os.path.exists(input_path):
-        prepare_data()
-    # df = pd.read_csv(input_path, sep='\t\t', header=None, index_col=None, error_bad_lines=False, warn_bad_lines=True)
-    # ... source is a \t\t separated 
 
-    df = pd.read_csv(input_path, sep=delimit, header=0, index_col=None, error_bad_lines=False, warn_bad_lines=True)
+    source = 'manual'  # wiki
+    
+    if source == 'wiki': 
+        input_path = os.path.join(input_dir, 'wikipedia-acronyms.csv')
+        if not os.path.exists(input_path): prepare_data()
+        # df = pd.read_csv(input_path, sep='\t\t', header=None, index_col=None, error_bad_lines=False, warn_bad_lines=True)
+        # ... source is a \t\t separated 
+
+        df = pd.read_csv(input_path, sep=sep, header=0, index_col=None, error_bad_lines=False, warn_bad_lines=True)
+    elif source == 'manual': 
+        input_path = os.path.join(input_dir, 'test_mapping.txt')
+
+        df = pd.read_csv(input_path, sep='^', header=None, index_col=None, error_bad_lines=False, warn_bad_lines=True)
+        df.columns = ['acronym', 'expansion']
+
+        for col in df.columns:
+            df[col] = df[col].str.upper()
+
 
     # header = ['acronym', 'expansion']
     # adict = {h: [] for h in header}
@@ -67,7 +80,7 @@ def t_acronym_lookup(input_dir='data'):
 
 def test(**kargs): 
 
-    t_acronym_lookup()
+    demo_acronym_lookup()
 
     return
 

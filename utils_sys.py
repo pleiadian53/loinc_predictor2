@@ -465,7 +465,7 @@ def file_path(file_, default_root=None, verify_=True):
 # [algorithm]
 def lcs(S,T):
     """
-    Find longest common substring
+    Find longest common substring between S and T
     """
     m = len(S)
     n = len(T)

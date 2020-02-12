@@ -11,17 +11,21 @@ import time
 from collections import defaultdict
 import csv
 import seaborn as sb
-import config
 # import rpy2.robjects as robjects
-from MapLOINCFields import *
-from CleanTextData import *
-from tabulate import tabulate
-
-from loinc import LoincTSet
 # from APISearchRequests import *
 # import rpy2.robjects.numpy2ri as numpy2ri
 # from rpy2.robjects.packages import importr
 
+### Local Modules
+import config
+
+from MapLOINCFields import *
+from CleanTextData import *
+from tabulate import tabulate
+
+import transformer
+from loinc import LoincTSet
+from utils_sys import highlight
 
 # ### Read in aggregate data & join with parsed/cleaned test name and specimen
 
@@ -478,7 +482,7 @@ def save_match_matrix(df, output_file='', metric='JW', **kargs):
     df.to_csv(output_path, sep=sep, index=False, header=True)
     return
 
-def distance_jaro_winkler(x, y, verbose=1): 
+def distance_jaro_winkler(x, y, verbose=0): 
     from pyjarowinkler import distance
     d = 1.0
     # value_default = "unknown"
@@ -498,6 +502,20 @@ def distance_jaro_winkler(x, y, verbose=1):
             if verbose: print("(distance_jaro_winkler) Possibly non-string values (x: {}, y:{})".format(x, y))
             d = 1.0-distance.get_jaro_distance(x, y, winkler=True, scaling=0.1)
     return d
+
+def distance_jaro_winkler_agg(s1, s2, sep=" ", verbose=0): 
+    d = 1.0
+    if x == "" and y == "": 
+        d = 0.0 
+    elif "" in (s1, s2): 
+        d = 1.0
+    else: 
+        token_to_string_distances = []
+        s1_tokenized = s1.split(sep)
+        s2_tokenized = s2.split(sep)
+
+        # [todo]
+    return d
         
 # Find best string matches between source data test or specimen tokens and the loincmap (i.e. 
 # the mapping rom LOINC short name to LOINC long name words)
@@ -508,6 +526,17 @@ def get_matches(data_col, loincmap, save=False):
     ------
     save: set to True to save the output dataframe (the best "translated" version of test strings in terms of LOINC vocab)
     """
+    def resolve_by_first_char(src, mapped): 
+        if src[0] != mapped[0]: # if the fist character doesn't even match, then don't used the mapped token 
+            return src
+        return mapped
+    def resolve(src, mapped):
+        
+        # add other rules here
+        final_token = resolve_by_first_char(src, mapped)
+
+        return final_token
+
     import stringdist
     from pyjarowinkler import distance
 
@@ -528,7 +557,7 @@ def get_matches(data_col, loincmap, save=False):
             print('Matching Term', i, '/', rows)
         for j in range(len(tokenized_list[i])):   # foreach token (e.g. Mitochondria)
             if not pd.isnull(tokenized_list[i][j]):
-                term = str(tokenized_list[i][j])
+                term = str(tokenized_list[i][j])  # a token in the attribute text
                 
                 # dists_LV = stringdist.stringdist(tokenized_list[i][j], loincmap.Token.values, method='lv')
                 dists_LV = [stringdist.levenshtein(term, str(token)) for token in loincmap.Token.values]
@@ -540,11 +569,14 @@ def get_matches(data_col, loincmap, save=False):
 
                 # but if we can't find a match, the keep the original token? 
 
-                match_matrix_LV.iloc[i, j] = loincmap.FinalTokenMap[np.argmin(dists_LV)]  # use short name as an anchor to compare (test_result_name and long name)
-                match_matrix_JW.iloc[i, j] = loincmap.FinalTokenMap[np.argmin(dists_JW)]
+                mappedLV = loincmap.FinalTokenMap[np.argmin(dists_LV)] 
+                match_matrix_LV.iloc[i, j] = resolve(term, mappedLV)  # use short name as an anchor to compare (test_result_name and long name)
+                
+                mappedJW = loincmap.FinalTokenMap[np.argmin(dists_JW)]
+                match_matrix_JW.iloc[i, j] = resolve(term, mappedJW)
 
     if save: 
-        # save_match_matrix(match_matrix_LV, metric='LV')
+        save_match_matrix(match_matrix_LV, metric='LV')
         save_match_matrix(match_matrix_JW, metric='JW')
         
     ############
@@ -585,13 +617,22 @@ def concatenate_match_results0(input_matrix, dataType):
     else:
         return pd.DataFrame(input_matrix.iloc[:, 0].values, index=input_matrix.index, columns=['SpecimenMap'])
 
-def concatenate_match_results(input_matrix, dataType, metric='JW'):
+def remove_duplicates(s, sep=" "):
+    tokens = str(s).split(sep)
+    return sep.join(sorted(set(tokens), key=tokens.index))
+
+def concatenate_match_results(input_matrix, dataType, metric='JW', remove_dup=True):
     n_rows = input_matrix.shape[0]
     n_cols = input_matrix.shape[1]
     for i in range(n_rows):
         for j in range(1, n_cols):
             if not pd.isnull(input_matrix.iloc[i, j]):
                 input_matrix.iloc[i, 0] = input_matrix.iloc[i, 0] + " " + input_matrix.iloc[i, j]
+        
+        if remove_dup: 
+            if isinstance(input_matrix.iloc[i, 0], str): 
+                input_matrix.iloc[i, 0] = remove_duplicates(input_matrix.iloc[i, 0])
+
     col = LoincTSet.get_sdist_mapped_col_name(dataType, metric=metric)
     return pd.DataFrame(input_matrix.iloc[:, 0].values, index=input_matrix.index, columns=[col])
 
@@ -700,33 +741,12 @@ def add_string_distance_features():
     return dat
 
 def preproces_source_values(df, col='', source_values=[], value_default=""): 
-
-    hasValidDf = df is not None and col in df.columns
-    if not source_values: # unique_tests
-        assert hasValidDf, "Neither test{result, order} strings nor training data were given!"
-        source_values = df[col].values
-    else: 
-        if isinstance(source_values, str): source_values = [source_values, ]
-
-    source_values_processed = []
-    n_null = n_numeric = 0
-    for source_value in df[col].values: 
-        if pd.isna(source_value): 
-            source_values_processed.append(value_default)
-            n_null += 1
-        elif isinstance(source_value, (int, float, )): 
-            n_numeric += 1
-            source_values_processed.append(str(source_value))
-        else: 
-            source_values_processed.append( source_value.strip() )
-
-    if hasValidDf: 
-        df[col] = source_values_processed
-        return df 
-    return source_values_processed
+    # import transformer
+    return transformer.preproces_source_values(df=df, col=col, source_values=source_values, value_default=value_default)
 
 def make_string_distance_features(df=None, dataType='test_order_name', loincmap=None, 
-       parsed_loinc_fields=None, source_values=[], verbose=1, transformed_vars_only=True, uniq_src_vals=True, value_default=""):
+       parsed_loinc_fields=None, source_values=[], verbose=1, transformed_vars_only=False, 
+       uniq_src_vals=True, value_default="", standardize=False, drop_datatype_col=True, save=True):
     """
  
     Assumptions
@@ -738,6 +758,38 @@ def make_string_distance_features(df=None, dataType='test_order_name', loincmap=
     1. Input: T-string value for each row
        Output: The transformed feature values (TestOrderNameMapLV, TestResultNameMapLV, etc)
     """
+    def test_match(test_col, test_str, part_name, part_expressions=[], target_terms=[], metric='?'):
+        # col: the name of the T-attribute (e.g. test_order_name)
+        # term: T-token 
+        # part: name of the LOINC part e.g. Component
+
+        if not target_terms: target_terms = ['albumin', 'CD4']
+
+        tTested = False
+        max_display = 10
+        for target_term in target_terms: 
+            if test_str.lower().find(target_term) > 0: 
+
+                print("(test) derived col: {}, term: {} vs part tokens:\n{} ...\n".format(col, test_str, part_expressions[:10]))
+                dists = []
+                for part_expr in part_expressions: 
+                    d = distance_jaro_winkler(test_str, str(part_expr), verbose=0)
+                    dists.append(d)
+
+                    if len(dists) < max_display: 
+                        print("... T-attribute value: {}:\n... Part expr: {}\n... dist={}\n".format(test_str, part_expr, d))
+                    # part_expr: CARDIAC PACEMAKER PROSTHETIC LEAD
+                    # test_str: URINE MICROALBUMIN CREATININE RATIO
+
+                bestmatch = np.argmin(dists)
+                best_dist = dists[bestmatch]
+                best_expr = uniqParts[part_name][bestmatch]
+                highlight("(test) min_dist: {} | (col: {}, metric: {}) => best_expr:\n{}\n".format(best_dist, test_col, metric, best_expr))
+                
+                # [distance_jaro_winkler(term, str(token), verbose=1) for token in part]
+                tTested = True
+        return tTested
+
     import stringdist
     from pyjarowinkler import distance
     from loinc import LoincTSet
@@ -747,45 +799,38 @@ def make_string_distance_features(df=None, dataType='test_order_name', loincmap=
     # value_default = "" # LoincTSet.token_default
 
     if loincmap is None or parsed_loinc_fields is None: 
+        # build the loincmap
         loincmap, short_to_long, parsed_loinc_fields = combine_loinc_mapping()
     
     # if df is None: transformed_vars_only = False
-    if len(source_values) == 0: # unique_tests
+    if isinstance(source_values, str): source_values = [source_values, ]
+    if len(source_values) > 0: # unique_tests
+        transformed_vars_only = True
+    else: # only "sourse_values" is given
         assert df is not None and dataType in df.columns, "Neither test{result, order} strings nor training data were given!"
         source_values = df[dataType].values
-    else: 
-        if isinstance(source_values, str): source_values = [source_values, ]
-        transformed_vars_only = True
 
     # preprocess source value to ensure that all values are of string type
     # preproces_source_values(df, col=dataType, source_values=source_values, value_default=value_default)
 
-    source_values_processed = []
-    n_null = n_numeric = 0
-    for source_value in source_values: 
-        if pd.isna(source_value): 
-            source_values_processed.append(value_default)
-            n_null += 1
-        elif isinstance(source_value, (int, float, )): 
-            n_numeric += 1
-            source_values_processed.append(str(source_value))
-        else: 
-            source_values_processed.append( source_value.strip() )
-    source_values = source_values_processed
+    if standardize: source_values = preproces_source_values(source_values=source_values, value_default="")
     ############################################################
 
     if uniq_src_vals: 
         source_values = np.unique(source_values)
-        transformed_vars_only = True
         print("(make_string_distance_features) Found {} unique source values".format(len(source_values)))
 
     # Find, for each T-string token, the best matched token from the loincmap
     # where T-string refers to the values of {test_order_name, test_result_name, ...}
+
+    # test_match_matrix_JW = load_match_matrix(metric='JW')
+    # test_match_matrix_LV = load_match_matrix(metric='LV')
+
     test_match_matrix_LV, test_match_matrix_JW = get_matches(source_values, loincmap)
 
     if verbose: 
         # (sdf) string distance feature
-        print("(sdf) test_match_matrix_LV:\n{}\n".format(test_match_matrix_LV.head(50) ))
+        print("(sdf) test_match_matrix_LV (cols={}):\n{}\n".format(test_match_matrix_LV.columns, test_match_matrix_LV.head(50) ))
         print("...   test_match_matrix_JW:\n{}\n".format(test_match_matrix_JW.head(50) ))
 
 
@@ -799,21 +844,36 @@ def make_string_distance_features(df=None, dataType='test_order_name', loincmap=
     #concat_lv_test_match_result.columns.values[0] = LoincTSet.get_sdist_mapped_col_name(dataType, metric="LV")
     #concat_jw_test_match_result.columns.values[0] = LoincTSet.get_sdist_mapped_col_name(dataType, metric="JW")
 
-    if transformed_vars_only: 
-        df_transformed = DataFrame(source_values, columns=[dataType, ])
-    else: 
-        assert df is not None
-        df_transformed = df
+    df_transformed = DataFrame(source_values, columns=[dataType, ])
+    if not transformed_vars_only: assert df is not None, "Source dataframe not given"
+        # df_transformed = df
 
-    col_lv_matched_text = LoincTSet.get_sdist_mapped_col_name(dataType, metric="LV")
-    df_transformed[col_lv_matched_text] = concat_lv_test_match_result[col_lv_matched_text]
-    col_jw_matched_text = LoincTSet.get_sdist_mapped_col_name(dataType, metric="JW")
-    df_transformed[col_jw_matched_text] = concat_jw_test_match_result[col_jw_matched_text]
+    # col_lv_matched_text = LoincTSet.get_sdist_mapped_col_name(dataType, metric="LV")
+    # df_transformed[col_lv_matched_text] = concat_lv_test_match_result[col_lv_matched_text]
+    # ... [note] this doesn't work 
+
+    # print("... concat_lv_test_match_result({}):\n{}\n".format(col_lv_matched_text, concat_lv_test_match_result[col_lv_matched_text].values))
+
+    df_transformed = pd.merge(df_transformed, concat_lv_test_match_result, how='left', left_on=dataType, right_index=True)
+    # ... join via df_transform[dataType] and index of concat_*
+
+    # col_jw_matched_text = LoincTSet.get_sdist_mapped_col_name(dataType, metric="JW")
+    # df_transformed[col_jw_matched_text] = concat_jw_test_match_result[col_jw_matched_text]
+    df_transformed = pd.merge(df_transformed, concat_jw_test_match_result, how='left', left_on=dataType, right_index=True)
  
     # concat_test_match_result = pd.concat([concat_lv_test_match_result, concat_jw_test_match_result], axis=1)
     
     print("... token(test) vs token(loinc) | after concatenation:\n{}\n".format(df_transformed.head(100)))
     assert len(source_values) == df_transformed.shape[0]
+    df_transformed.fillna("", inplace=True)
+    ############################################
+    # e.g. 
+    #                         test_order_name                   TestOrderMapLV                   TestOrderMapJW
+    # 0                                                             NaN => ''                         NaN => ''
+    # 1          5 HIAA QUANT 24 HR URINE         5 HIAA QUANT 24 HR URINE         5 HIAA QUANT 24 HR URINE
+    # 2               ABO GROUP RH FACTOR              ABO GROUP RH FACTOR              ABO GROUP RH FACTOR
+    # 3                  ACCUTYPE R IL28B                ACUTE RIGHT IL28B             ACCUTYPE RIGHT IL28B
+    # 4                     ACETAMINOPHEN                    ACETAMINOPHEN                    ACETAMINOPHEN
     
     # dat = data.merge(concat_test_match_result, how='left', left_on='CleanedTestName', right_index=True)
     # dat = dat.merge(concat_spec_match_result, how='left', left_on='CleanedSpecimen', right_index=True)
@@ -828,8 +888,7 @@ def make_string_distance_features(df=None, dataType='test_order_name', loincmap=
     loinc_comp_syst.ExpandedSystem = loinc_comp_syst.ExpandedSystem.astype(object)
     loinc_num_set = loinc_comp_syst.LOINC.unique()
 
-    if config.print_status == 'Y':
-        print('Generating LOINC System Field Expansion')
+    if config.print_status == 'Y': print('Generating LOINC System Field Expansion')
 
     # -- mapping System tokens to full names via loincmap
     rows = loinc_comp_syst.shape[0]
@@ -853,11 +912,13 @@ def make_string_distance_features(df=None, dataType='test_order_name', loincmap=
     cols_sdist_map = LoincTSet.get_sdist_mapped_col_names(dataType, metrics=['LV', 'JW'], throw=True)
     # unique_combos = dat[cols_sdist_map].drop_duplicates().reset_index(drop=True)
     
-    partDict = {}
+    uniqParts = {} # partDict
     #######################################################
-    partDict['Component'] = unique_components = loinc_comp_syst.Component.unique()
-    partDict['System'] = unique_system = loinc_comp_syst[~pd.isnull(loinc_comp_syst.ExpandedSystem)].ExpandedSystem.unique()
+    uniqParts['Component'] = unique_components = loinc_comp_syst.Component.unique()
+    uniqParts['System'] = unique_system = loinc_comp_syst[~pd.isnull(loinc_comp_syst.ExpandedSystem)].ExpandedSystem.unique()
     #######################################################
+    print("... unique Component (n={}):\n{}\n".format(len(unique_components), unique_components[:100]))
+    print("... unique System (n={}):\n{}\n".format(len(unique_system), unique_system[:100]))
 
     # ['PredictedComponentJW', 'ComponentMatchDistJW', 
     #  'PredictedComponentLV', 'ComponentMatchDistLV',]
@@ -876,31 +937,42 @@ def make_string_distance_features(df=None, dataType='test_order_name', loincmap=
 
     if config.print_status == 'Y': print('String Distance Matching to LOINC Component and System')
     
-    # features that gauge how well the test strings match with LOINC Component and System
+    # --- Test strings to predict LOINC parts (e.g. Component, System)
+    #     i.e. features that gauge how well the test strings match with LOINC Component and System
 
     nrows = df_transformed.shape[0]
     parts = ['Component', 'System', ]
     for i in range(nrows):  # foreach row in the transformed data
-        if i % 500 == 0 and config.print_status == 'Y':
-            print('Matching', i, '/', nrows)
-        for part in parts: 
+        if i % 500 == 0 and config.print_status == 'Y': print('Matching', i, '/', nrows)
+
+        for part in parts: # 'Component', 'System'
 
             col = LoincTSet.get_sdist_mapped_col_name(dataType, metric="JW")  # mapped test-string in JW
-            term = str(df_transformed.at[i, col])   # [check] can be a non-string value???
-            if not isinstance(term, str): 
-                term = str(term)
-                print("... Found non-string {}-value: {}!".format(col, term))
+            test_expr = df_transformed.at[i, col] # mapped T-string e.g. "URINE MICROALBUMIN CREATININE RATIO"
+            # [check] can be a non-string value or NaN
+
+            assert not pd.isna(test_expr)
+            if not isinstance(test_expr, str): 
+                test_expr = str(test_expr)
+                print("... Found non-string {}-value: {}!".format(col, test_expr))
 
             #----------------------------------
             # matches = stringdist.stringdist(df_transformed.at[i, 'TestNameMapJW'], unique_components, method='jw', p=0)
-            # ... 1.0-distance.get_jaro_distance(term, str(token), winkler=True, scaling=0.1)
-            matches = [distance_jaro_winkler(term, str(token), verbose=1) for token in partDict[part]]  # foreach LOINC part toekn
+            # ... 1.0-distance.get_jaro_distance(test_expr, str(token), winkler=True, scaling=0.1)
+            matches = [distance_jaro_winkler(test_expr, str(part_expr), verbose=0) for part_expr in uniqParts[part]]  
+            # ... foreach LOINC part expression, compute its distance to test expression
+            # ... part_expr: CARDIAC PACEMAKER PROSTHETIC LEAD
             bestmatch = np.argmin(matches)
             #----------------------------------
-            # ... best (n)-gram match where n = 1
+
+            # test
+            # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+            tTested = test_match(test_col=col, test_str=test_expr, part_name=part, part_expressions=uniqParts[part], metric='JW') 
+            # if tTested: sys.exit(0)
+            # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
             col_pred = LoincTSet.get_sdist_matched_loinc_col_name(dataType, part=part, vtype='Predicted', metric='JW', throw=True)
-            df_transformed.at[i, col_pred] = unique_components[bestmatch]
+            df_transformed.at[i, col_pred] = uniqParts[part][bestmatch]  # uniqParts[part]: {unique_components, unique_systems, ...}
 
             col_dist = LoincTSet.get_sdist_matched_loinc_col_name(dataType, part=part, vtype='MatchDist', metric='JW', throw=True)
             df_transformed.at[i, col_dist] = matches[bestmatch]
@@ -909,17 +981,17 @@ def make_string_distance_features(df=None, dataType='test_order_name', loincmap=
             # ... JW features ready 
 
             col = LoincTSet.get_sdist_mapped_col_name(dataType, metric="LV")
-            term = df_transformed.at[i, col]  # [check] can be a non-string value???
-            if not isinstance(term, str): term = str(term)
+            test_expr = df_transformed.at[i, col]  # [check] can be a non-string value???
+            if not isinstance(test_expr, str): test_expr = str(test_expr)
 
             #----------------------------------
             # matches = stringdist.stringdist(df_transformed.at[i, 'TestNameMapLV'], unique_components, method='lv')
-            matches = [stringdist.levenshtein(term, str(token)) for token in partDict[part]]
+            matches = [stringdist.levenshtein(test_expr, str(part_expr)) for part_expr in uniqParts[part]]
             bestmatch = np.argmin(matches)
             #----------------------------------
 
             col_pred = LoincTSet.get_sdist_matched_loinc_col_name(dataType, part=part, vtype='Predicted', metric='LV', throw=True)
-            df_transformed.at[i, col_pred] = unique_components[bestmatch]
+            df_transformed.at[i, col_pred] = uniqParts[part][bestmatch]
 
             col_dist = LoincTSet.get_sdist_matched_loinc_col_name(dataType, part=part, vtype='MatchDist', metric='LV', throw=True)
             df_transformed.at[i, col_dist] = matches[bestmatch]
@@ -927,11 +999,30 @@ def make_string_distance_features(df=None, dataType='test_order_name', loincmap=
             ###################################################
             # ... LV features ready
         
-    output_path = os.path.join(config.out_dir, "{}-sdist-vars.csv".format(dataType))
-    if verbose: print("(make_string_distance_features) Saving string distance features to:\n{}\n ... #".format(output_path))
-    df_transformed.to_csv(output_path, index=False)
-    
-    return df_transformed
+    if save: 
+        output_path = os.path.join(config.out_dir, "{}-sdist-vars.csv".format(dataType))
+        if verbose: print("(make_string_distance_features) Saving string distance features to:\n{}\n ... #".format(output_path))
+        df_transformed.to_csv(output_path, index=False)
+        print("(make_string_distance_features) cols(df_transformed):\n{}\n".format(list(df_transformed.columns.values)))
+
+        # e.g. example columns derived from test_order_name
+        # ['test_order_name', 'TestOrderMapLV', 'TestOrderMapJW', 'TOPredictedComponentLV', 'TOMatchDistComponentLV', 
+        # 'TOPredictedComponentJW', 'TOMatchDistComponentJW', 'TOPredictedSystemLV', 'TOMatchDistSystemLV', 
+        # 'TOPredictedSystemJW', 'TOMatchDistSystemJW']
+
+    if transformed_vars_only: 
+        return df_transformed
+
+    # otherwise, return the input data (all but the dataType column) plus the attributes derived from the dataType column (e.g. test_result_name)
+    print("... before the merge dim(df): {}".format(df.shape))
+    df = pd.merge(df, df_transformed, on=dataType)
+    print("... after  the merge dim(df): {}".format(df.shape))
+
+    if drop_datatype_col: 
+        if verbose: print("(make_string_distance_features) Drop {}, keeping only derived attributes".format(dataType))
+        df = df.drop([dataType, ], axis=1)
+
+    return df
 
 def demo_create_distance_vars(save=True): 
     """
@@ -940,8 +1031,8 @@ def demo_create_distance_vars(save=True):
     -------
     mtrt_to_loinc.demo_create_tfidf_vars()
     """
-
     from analyzer import label_by_performance, col_values_by_codes, load_src_data
+    from data_processor import save_data
 
     cohort = "hepatitis-c"
     col_target = 'test_result_loinc_code'
@@ -957,6 +1048,10 @@ def demo_create_distance_vars(save=True):
     # adict = col_values_by_codes(target_codes, df=dfp, cols=['test_result_name', 'test_order_name'], mode='raw')
     dfp = dfp.loc[dfp[col_target].isin(target_codes)]
 
+    # unique codes 
+    unique_codes = dfp[col_target].unique()
+    N_ucodes = len(unique_codes)
+
     loincmap = load_loincmap(cohort=cohort)
     if loincmap is None: 
         loincmap, short_to_long, parsed_loinc_fields = combine_loinc_mapping()
@@ -965,35 +1060,51 @@ def demo_create_distance_vars(save=True):
     value_default = ""
     target_test_cols = ['test_order_name', 'test_result_name', ]
     for col in target_test_cols: 
+        print("(feature creation) Processing DataType/Column: {} ######\n... dim(data) BEFORE merge: {}\n".format(col, dfp.shape))
 
         # --- pass df
-        
         # dft = dfp[ [col] ]   # just pass two columns: test_result_loinc_code, test*
         # dft = dft.drop_duplicates().reset_index(drop=True)
 
         # --- pass only source valus
-        dfp = preproces_source_values(dfp, col=col, value_default=value_default)
+        dim0 = dfp.shape; N0 = dim0[0]
+        dfp = preproces_source_values(df=dfp, col=col, value_default=value_default)
+        assert dfp.shape == dim0
+
         uniq_src_vals = dfp[col].unique()
-        print("... n(unique values): {}".format(len(uniq_src_vals)))
+        N_uniq = len(uniq_src_vals)
+        print("... Col: {} => n(unique values): {} | deg(uniq): {} | deg(uniq ~ ncodes): {}".format(col, 
+            N_uniq, N_uniq/(N0+0.0), N_uniq/(N_uniq+0.0) ))
 
         # test_order_names = adict['test_order_name']
         # test_result_names = adict['test_result_name']
 
         # pass unique test_order_name instead?
-        dft = make_string_distance_features(
-                    source_values=uniq_src_vals, # df=dft, dataType='test_order_name', 
+        dim0 = dfp.shape
+        transformed_vars_only = False # if True, only return the derived features (and the input column but not the rest)
+        dfp = make_string_distance_features(df=dfp, 
+                    dataType=col,  # this is necessary to construct a dataframe
+                    # source_values=uniq_src_vals, # df=dft, dataType='test_order_name', 
                     loincmap=loincmap, # source_values=dfp['test_order_name'].values)
+                    drop_datatype_col=True, 
+                    transformed_vars_only=transformed_vars_only, 
                     uniq_src_vals=True, value_default=value_default)
-        print("... finishing string-matching features | dim(transformed): {}".format(dft.shape))
+        if not transformed_vars_only: 
+            assert dfp.shape[1] > dim0[1], "Prior to transformation dim0: {}, after dim: {}".format(dim0, dfp.shape)
+        print("... finishing string-matching features | dim(transformed): {} | N0: {}".format(dfp.shape, N0))
         # dft = make_string_distance_features(loincmap=loincmap, source_values=test_order_names)# source_values=dfp['test_order_name'].values)
         
         # merge transformed dataframe with the training data
         # dfp.merge(concat_test_match_result, how='left', left_on='CleanedTestName', right_index=True)
-        dfp = pd.merge(dfp, dft, on=col)
-        print("... training data dim after merge: {}".format(dfp.shape))
+        # assert col in dfp.columns
+        # assert col in dft.columns, "col(dft):\n{}\n".format(dft.columns)
+        # dfp = pd.merge(dfp, dft, on=col)
+        # ... inner join
+        print("... dim(data) AFTER merge: {}".format(dfp.shape))
+    ### ... 
 
     # drop the source cols
-    dfp = dfp.drop(target_test_cols, axis=1)
+    # dfp = dfp.drop(target_test_cols, axis=1)
     print("Final dataframe dim: {}, cols: {}".format(dfp.shape, dfp.columns.values))
     
     if save: 

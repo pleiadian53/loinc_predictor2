@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 
 class LoincTable(object): 
-    six_parts = p6 = ["COMPONENT","PROPERTY","TIME_ASPCT","SYSTEM","SCALE_TYP","METHOD_TYP"]  # ['CLASS']
+    cols_6p = six_parts = p6 = ["COMPONENT","PROPERTY","TIME_ASPCT","SYSTEM","SCALE_TYP","METHOD_TYP"]  # ['CLASS']
     text_cols = ['LONG_COMMON_NAME', 'SHORTNAME', 'RELATEDNAMES2', 'STATUS_TEXT']
 
     # noisy codes 
@@ -17,6 +17,11 @@ class LoincTable(object):
     file_table = 'Loinc.csv'
     input_dir = os.path.join(os.getcwd(), 'LoincTable')
     input_path = os.path.join(input_dir, file_table)
+
+    long_name = 'LONG_COMMON_NAME'
+    short_name = 'SHORTNAME'
+
+    stop_words = ["IN", "FROM", "ON", "OR", "OF", "BY", "AND", "&", "TO", "BY", "", " "]
 
     @staticmethod
     def load(**kargs): 
@@ -46,8 +51,91 @@ class TSet(object):
 
 class LoincTSet(TSet):
     noisy_codes = ['request', 'no loinc needed', '.', ';', 'coumt', 'unloinc'] 
-    meta_sender_name = ['Athena', 'Saturn', 'Apollo', 'Poseidon', 'Zeus', 'Plutus', 'Ares']
+    sites = meta_sender_names = ['Athena', 'Saturn', 'Apollo', 'Poseidon', 'Zeus', 'Plutus', 'Ares']
+
+    col_target = 'test_result_loinc_code'
+    col_tag = 'medivo_test_result_type'
+
+    cols_result_name_cleaned = ['Site', 'OriginalTestResult', 'CleanedTestResult']
+    cols_order_name_cleaned = ["Site", "OriginalTestOrder", "CleanedTestOrder"]
+    cols_comments_cleaned = ["Site", "OriginalComments", "CleanedTestComments"]
+    cols_specimen_cleaned = ['Site', 'OriginalSpecimen', 'CleanedSpecimen']
+    cols_mtrt_cleaned = ["Site", "OriginalMTRT", "CleanedMTRT", ]
+    cols_generic = ['site', 'original', 'cleaned']
+
+    cols_abbrev = {'test_order_name': 'TO', 'test_result_name': 'TR', 
+        'test_result_comments': 'TC', 
+        'medivo_test_result_type': 'MTRT', }
+
+    cols_sdist_matched_loinc = ["PredictedComponent", "ComponentMatchDist", "PredictedSystem", "SystemMatchDist", ]
+
+    @staticmethod
+    def get_cols_cleaned(dtype): 
+        if dtype == "test_result_name":
+            cols = LoincTSet.cols_result_name_cleaned
+        elif dtype == "test_order_name":
+            cols = LoincTSet.cols_order_name_cleaned 
+        elif dtype == 'test_result_comments':
+            cols = LoincTSet.cols_comments_cleaned
+        elif dtype == 'medivo_test_result_type':
+            cols = LoincTSet.cols_mtrt_cleaned
+        elif dtype == 'test_specimen_type': 
+            cols = LoincTSet.cols_specimen_cleaned
+        else: 
+            cols = LoincTSet.cols_generic
+        return cols
     
+    @staticmethod
+    def get_sdist_mapped_col_name(dtype, metric='', throw=True):  # the column name for the string-distane features (e.g. string distance between test_order_name and loincmap)
+        col = "TestNameMap"
+        if dtype == "test_result_name":
+            col = "TestResultMap"
+        elif dtype == "test_order_name":
+            col = "TestOrderMap"
+        elif dtype == 'test_result_comments':
+            col = "TestCommentsMap"
+        elif dtype == 'test_specimen_type': 
+            col = "TestSpecimenMap"
+        else: 
+            msg = f"Unknown data type (i.e. a test-related column in the training data): {dtype}"
+            if throw: 
+                raise ValueError(msg)
+            else: 
+                print(msg)
+                col = "TestNameMap"
+        if metric: col += metric
+        return col
+    @staticmethod
+    def get_sdist_mapped_col_names(dtype, metrics=['LV', 'JW'], throw=True):
+        cols = []
+        for metric in metrics: 
+            cols.append( LoincTSet.get_sdist_mapped_col_name(dtype, metric=metric, throw=throw) )
+        return cols
+    @staticmethod
+    def get_sdist_matched_loinc_col_name(dtype, part='Component', vtype='Predicted', metric='LV', throw=True): 
+        base = vtype + part
+        if not dtype in LoincTSet.cols_abbrev: 
+            msg = f"Unknown data type: {dtype}"
+            if throw: 
+                raise ValueError(msg)
+            else: 
+                print(msg)
+
+        prefix = LoincTSet.cols_abbrev.get(dtype, '')
+        return prefix + base + metric 
+    @staticmethod
+    def get_sdist_matched_loinc_col_names(dtype, parts=['Component', 'System',], 
+           types=['Predicted', 'MatchDist'], metrics=['LV', 'JW'], throw=True): 
+        
+        cols = []
+        for part in parts: 
+            for metric in metrics: 
+                for t in types: 
+                    # base = t + part  # PredictedComponent
+                    cols.append( LoincTSet.get_sdist_matched_loinc_col_name(dtype, vtype=t, part=part, metric=metric, throw=throw) )
+        return cols
+
+### LoincTSet
 
 class LoincMTRT(object):
     header = ['Test Result LOINC Code', 'Medivo Test Result Type']
@@ -55,6 +143,8 @@ class LoincMTRT(object):
     col_value = "Medivo Test Result Type"
     table = 'loinc-leela.csv'
     table_prime = 'loinc-leela-derived.csv'
+
+    stop_words = ["IN", "FROM", "ON", "OR", "OF", "BY", "AND", "&", "TO", "BY", "", " "]
 
     @staticmethod
     def load_loinc_to_mtrt(input_file=table, **kargs):
@@ -90,8 +180,15 @@ class LoincMTRT(object):
             df = dequote(df, col=LoincMTRT.col_value)
 
         save_generic(df, sep=sep, output_file=output_file, output_dir=output_dir) 
-
         return  
+    @staticmethod
+    def load_derived_loinc_to_mtrt(**kargs):
+        sep = kargs.get('sep', ',')
+        input_dir = kargs.get('input_dir', 'data')
+        input_file = kargs.get("input_file", LoincMTRT.table_prime)
+
+        # [output[] None if file not found
+        return load_generic(input_file=input_file, sep=sep, input_dir=input_dir) 
 
     @staticmethod
     def transform():
@@ -120,6 +217,11 @@ class FeatureSet(object):
                 
                 # 'receiving_organization_state', 
                 # 'receiving_organization_zip_code', 
+
+                # ---------------------------------------
+                # 'ordering_provider_primary_specialty', 
+                # 'ordering_provider_secondary_specialty'
+                # ---------------------------------------
                 
                 # 'ordering_practice_lab_account_name',  # high card
                 # 'ordering_practice_lab_account_number', # high card
@@ -188,12 +290,14 @@ class FeatureSet(object):
                 
                 # 'meta_ingestion_datetime',
                 
-                'meta_sender_name',  #  n_uniq=7, m=0 # <<< 
+                'meta_sender_name',  #  n_uniq=7, m=0% # <<< 
+                # ... values: ['Athena' 'Saturn' 'Apollo' 'Poseidon' 'Zeus' 'Plutus' 'Ares']
+
                 #'meta_sender_source',  # n_uniq=2
                 # 'meta_sender_type',    # n_uniq=2
                 # 'meta_sender_dataset',  # n_uniq=1
                 
-                'medivo_test_result_type',  # n_uniq=3493, <<<<
+                'medivo_test_result_type',  # n_uniq=696/(n=67079,N=71224 | r_miss=5.82%) <<<<
             
                 ]
 
@@ -208,6 +312,14 @@ class FeatureSet(object):
     high_card_cols = list(set(cat_cols)-set(low_card_cols))
 
     target_columns = cat_cols + cont_cols + target_cols
+
+    @staticmethod
+    def get_feature_names(): 
+        return FeatureSet.target_columns
+
+    @staticmethod
+    def get_targets(): 
+        return FeatureSet.target_cols
 
 ### end class FeatureSet
 
@@ -244,37 +356,48 @@ def load_loinc_to_mtrt(input_file='loinc-leela.csv', **kargs):
     return df
 
 
+# Comparison methods
 #########################################################################
 # ... analysis utilties
 
-def compare_6parts_longname(df=None, verbose=1, n_display=100, codes=[]): 
+def compare_6parts(df=None, codes=[], n_samples=-1, cols_6p=[], verbose=1): 
     if df is None: df = load_loinc_table(dehyphenate=True)
     col_code = LoincTable.col_code
     adict = {}
     
     ucodes = df[col_code].unique()
     if len(codes) == 0: 
-        codes = np.random.choice(ucodes, min(n_display, len(ucodes)))
+        n_samples = 20
+        codes = np.random.choice(ucodes, min(n_samples, len(ucodes)))
     else: 
-        if n_display > 0: 
-            codes = np.random.choice(codes, min(n_display, len(codes)))
+        if n_samples > 0: 
+            codes = np.random.choice(codes, min(n_samples, len(codes)))
 
+    target_properties = ['SHORTNAME', 'LONG_COMMON_NAME', ]
+    if not cols_6p: 
+        cols_6p = ['COMPONENT', 'PROPERTY', 'TIME_ASPCT', 'SYSTEM', 'METHOD_TYP', 'SCALE_TYP']
+        target_properties = target_properties + cols_6p 
+    
     for r, row in df.iterrows():
         code = row[col_code]
-        p6 = [row['COMPONENT'], row['PROPERTY'], row['TIME_ASPCT'], row['SYSTEM'], row['METHOD_TYP'], row['SCALE_TYP'], row['CLASS']]
-        six_parts = ': '.join(str(e) for e in p6)
-        msg = "[{}] {} (6p: {}) =>\n ... {}\n".format(r+1, code, six_parts, row['LONG_COMMON_NAME'])
-        if verbose: 
-            if len(codes)==0 or (code in codes): 
+        
+        # assert sum(1 for part in cols_6p if not part in set(row.index)) == 0, "row.index.values={} vs cols(6p): {}".format(
+        #     list(row.index.values), cols_6p)
+
+        if len(codes)==0 or (code in codes): 
+            p6 = [row[part] for part in cols_6p]
+            six_parts = ': '.join(str(e) for e in p6)
+            if verbose: 
+                msg = "[{}] {} (6p: {}) =>\n ... {}\n".format(r+1, code, six_parts, row['LONG_COMMON_NAME'])
                 print(msg)
-                
-        adict[code] = (p6, row['LONG_COMMON_NAME'])
+                  
+            adict[code] = {col: row[col] for col in target_properties}  # (p6, row['LONG_COMMON_NAME'])
     return adict
 
 def compare_short_long_names(df=None, verbose=1, n_display=-1, codes=[], **kargs): 
     verbose = kargs.get('verbose', 1)
 
-    if df is None: df_loinc = load_loinc_table(dehyphenate=True)
+    if df is None: df = load_loinc_table(dehyphenate=True)
     col_code = LoincTable.col_code
 
     ucodes = df[col_code].unique()
@@ -299,10 +422,15 @@ def compare_short_long_names(df=None, verbose=1, n_display=-1, codes=[], **kargs
         adict[code] = (short_name, long_name)
     return adict   
 
-def compare_longname_mtrt(df=None, df_loinc=None, n_display=-1, codes=[], **kargs):
+def compare_longname_mtrt(df_mtrt=None, df_loinc=None, n_display=-1, codes=[], **kargs):
+    """
+
+    Related 
+    -------
+    mtrt_to_loinc.demo_parse()
+    """
     verbose = kargs.get('verbose', 1)
 
-    df_mtrt = df
     table_mtrt = kargs.get('input_mtrt', 'loinc-leela.csv')
     if df_mtrt is None: df_mtrt = LoincMTRT.load_loinc_to_mtrt(input_file=table_mtrt)
     if df_loinc is None: df_loinc = load_loinc_table(dehyphenate=True)
@@ -342,110 +470,78 @@ def compare_longname_mtrt(df=None, df_loinc=None, n_display=-1, codes=[], **karg
             adict[target_code] = (mtrt_name, long_name)
     return adict 
 
-def add_string_distance_features():
-    # joined_data = build_cube()
-    # data = add_cuis_to_cube(joined_data)
+def compare_by_distance(df=None, df_loinc=None, n_display=-1, codes=[], **kargs): 
+    pass
+
+def get_loinc_values(codes, target_cols=[], df_loinc=None, dehyphenate=True):
+    from collections import defaultdict
+
+    value_default = ''
+    N0 = len(codes)
+
+    # preprocess the codes 
+    processed_codes = []
+    for code in codes: 
+        if pd.isna(code) or len(str(code).strip()) == 0: 
+            processed_codes.append(value_default)
+        else: 
+            if dehyphenate:
+                assert code.find('-') < 0
+            processed_codes.append(code)
+    codes = processed_codes
+    #######################
+
+    if df_loinc is None: df_loinc = load_loinc_table(dehyphenate=dehyphenate)
+    col_code = LoincTable.col_code
+    col_ln, col_sn = 'LONG_COMMON_NAME', 'SHORTNAME'
+    if not target_cols: target_cols = [col_ln, col_sn, ]
+    df_loinc = df_loinc.loc[df_loinc[col_code].isin(codes)]
+
+    adict = defaultdict(list)
+    adict[col_code] = codes
+    for code in codes: # foreach input LOINC code
+        dfr = df_loinc.loc[df_loinc[col_code]==code]
+        if not dfr.empty:  # if we find its descriptor from the LOINC table
+            assert dfr.shape[0] == 1
+            for col in target_cols: 
+                val = dfr[col].iloc[0]
+                if pd.isna(val): val = value_default
+                adict[col].append(val)
+        else: # if this code is not present in the LOINC table
+            for col in target_cols: 
+                adict[col].append(value_default)
+    assert len(adict[target_cols[0]]) == N0, \
+        "The number of attribute values (n={}) should match with the number of the codes (n={})".format(len(adict[target_cols[0]]), N0)
+
+    return adict
     
-    loincmap = combine_loinc_mapping()
+# GROUP-BY methods
+########################################################################
+
+def group_by(df_loinc=None, cols=['COMPONENT', 'SYSTEM',], verbose=1, n_samples=-1): 
+    if df_loinc is None: df_loinc = load_loinc_table(dehyphenate=True)
+    col_code = LoincTable.col_code
+
+    target_properties = ['SHORTNAME', ] # 'LONG_COMMON_NAME'
+    cols_6p = ['COMPONENT', 'PROPERTY', 'TIME_ASPCT', 'SYSTEM', 'METHOD_TYP', 'SCALE_TYP']
+    target_properties = [col_code, ] + target_properties + LoincTable.cols_6p 
+
+    adict = {}
+    for index, dfg in df_loinc.groupby(cols): 
+        dfe = dfg[target_properties]
+        adict[index] = dfe
+
+    if verbose:
+        n_groups = len(adict)
+        if n_samples < 0: n_samples = n_groups
+        test_cases = set(np.random.choice(range(n_groups), min(n_groups, n_samples)))
+        for i, (index, dfg) in enumerate(adict.items()):
+            nrow = dfg.shape[0] 
+            if i in test_cases and nrow > 1: 
+                print("... [{}] => \n{}\n".format(index, dfg.sample(n=min(nrow, 5)).to_string(index=False) ))
     
-    unique_tests = data[~data.CleanedTestName.isnull()].CleanedTestName.unique()
-    unique_specimen_types = data[~data.CleanedSpecimen.isnull()].CleanedSpecimen.unique()
+    return adict
 
-    test_match_matrix_LV, test_match_matrix_JW = get_matches(unique_tests, loincmap)
-    spec_match_matrix_LV, spec_match_matrix_JW = get_matches(unique_specimen_types, loincmap)
-
-    if config.print_status == 'Y':
-        print('Concatenating String Match Results')
-    concat_lv_test_match_result = concatenate_match_results(test_match_matrix_LV, 1)
-    concat_jw_test_match_result = concatenate_match_results(test_match_matrix_JW, 1)
-    concat_lv_spec_match_result = concatenate_match_results(spec_match_matrix_LV, 2)
-    concat_jw_spec_match_result = concatenate_match_results(spec_match_matrix_JW, 2)
-
-    concat_lv_test_match_result.columns.values[0] = 'TestNameMapLV'
-    concat_jw_test_match_result.columns.values[0] = 'TestNameMapJW'
-    concat_lv_spec_match_result.columns.values[0] = 'SpecimenMapLV'
-    concat_jw_spec_match_result.columns.values[0] = 'SpecimenMapJW'
-
-    concat_test_match_result = pd.concat([concat_lv_test_match_result, concat_jw_test_match_result], axis=1)
-    concat_spec_match_result = pd.concat([concat_lv_spec_match_result, concat_jw_spec_match_result], 
-        axis=1)
-    
-    dat = data.merge(concat_test_match_result, how='left', left_on='CleanedTestName', right_index=True)
-    dat = dat.merge(concat_spec_match_result, how='left', left_on='CleanedSpecimen', right_index=True)
-    
-    loinc_comp_syst = parsed_loinc_fields[['LOINC', 'Component', 'System']]
-    loinc_comp_syst = loinc_comp_syst[(~pd.isnull(loinc_comp_syst.System)) & 
-        (loinc_comp_syst.System != '')].reset_index(drop=True)
-    loinc_comp_syst['ExpandedSystem'] = np.nan
-    loinc_comp_syst.ExpandedSystem = loinc_comp_syst.ExpandedSystem.astype(object)
-    
-    loinc_num_set = loinc_comp_syst.LOINC.unique()
-
-    if config.print_status == 'Y':
-        print('Generating LOINC System Field Expansion')
-    rows = loinc_comp_syst.shape[0]
-    for i in range(rows):
-        if config.print_status == 'Y' and i % 5000 == 0:
-            print('Row', i, '/', rows)
-        if not pd.isnull(loinc_comp_syst.System[i]):
-            loinc_comp_syst.at[i, 'System'] = loinc_comp_syst.System[i].split(" ")
-            for term in loinc_comp_syst.System[i]:
-                mapped_term = loincmap.loc[loincmap.Token == term, 'FinalTokenMap'].values[0]
-                if pd.isnull(loinc_comp_syst.ExpandedSystem[i]):
-                    loinc_comp_syst.at[i, 'ExpandedSystem'] = mapped_term
-                else:
-                    loinc_comp_syst.at[i, 'ExpandedSystem'] = loinc_comp_syst.ExpandedSystem[i] + " " + mapped_term
-
-    unique_combos = dat[['TestNameMapJW', 'SpecimenMapJW', 'TestNameMapLV', 'SpecimenMapLV']].drop_duplicates().reset_index(drop=True)
-    unique_components = loinc_comp_syst.Component.unique()
-    unique_system = loinc_comp_syst[~pd.isnull(loinc_comp_syst.ExpandedSystem)].ExpandedSystem.unique()
-    
-    unique_combos = pd.concat([unique_combos, pd.DataFrame(columns=['PredictedComponentJW', 'ComponentMatchDistJW', 'PredictedComponentLV', 'ComponentMatchDistLV', 
-               'PredictedSystemJW', 'SystemMatchDistJW', 'PredictedSystemLV', 'SystemMatchDistLV'])], sort=False)
-    
-    numpy2ri.activate()
-    stringdist = importr('stringdist', lib_loc=config.lib_loc)
-
-    if config.print_status == 'Y':
-        print('String Distance Matching to LOINC Component and System')
-
-    nrows = unique_combos.shape[0]
-
-    for i in range(nrows):
-        if i % 500 == 0 and config.print_status == 'Y':
-            print('Matching', i, '/', nrows)
-        matches = stringdist.stringdist(unique_combos.at[i, 'TestNameMapJW'], unique_components,
-            method='jw', p=0)
-        bestmatch = np.argmin(matches)
-        unique_combos.at[i, 'PredictedComponentJW'] = unique_components[bestmatch]
-        unique_combos.at[i, 'ComponentMatchDistJW'] = matches[bestmatch]
-
-        matches = stringdist.stringdist(unique_combos.at[i, 'TestNameMapLV'], unique_components,
-            method='lv')
-        bestmatch = np.argmin(matches)
-        unique_combos.at[i, 'PredictedComponentLV'] = unique_components[bestmatch]
-        unique_combos.at[i, 'ComponentMatchDistLV'] = matches[bestmatch]
-
-        matches = stringdist.stringdist(unique_combos.at[i, 'SpecimenMapJW'], unique_system,
-            method='jw', p=0)
-        bestmatch = np.argmin(matches)
-        unique_combos.at[i, 'PredictedSystemJW'] = unique_system[bestmatch]
-        unique_combos.at[i, 'SystemMatchDistJW'] = matches[bestmatch]
-
-        matches = stringdist.stringdist(unique_combos.at[i, 'SpecimenMapLV'], unique_system,
-            method='lv')
-        bestmatch = np.argmin(matches)
-        unique_combos.at[i, 'PredictedSystemLV'] = unique_system[bestmatch]
-        unique_combos.at[i, 'SystemMatchDistLV'] = matches[bestmatch]
-        
-    dat = dat.merge(unique_combos, how='left', left_on=['TestNameMapLV', 'TestNameMapJW', 'SpecimenMapLV',
-       'SpecimenMapJW'], right_on=['TestNameMapLV', 'TestNameMapJW', 'SpecimenMapLV',
-       'SpecimenMapJW'])
-    
-    dat.to_csv(config.out_dir + 'datCube.csv', index=False)
-    
-    return dat
-    
 ########################################################################
 
 def dehyphenate(df, col='test_result_loinc_code'): # 'LOINC_NUM'
@@ -528,7 +624,7 @@ def canonicalize(df, col_target="test_result_loinc_code",
     if not noisy_values: noisy_values = LoincTSet.noisy_codes # ['request', 'no loinc needed', '.', ';', 'coumt', 'unloinc']
     
     if verbose: 
-        print("(canonicalize) Operations> fillna, dehyphenate, replace_values, trim_tail, fill_others")
+        print("(canonicalize) Operations: fill n/a + dehyphenate + replace_values + trim_tail + fill others (non-target classes)")
     
     # fill na 
     df[col_target].fillna(value=token_missing, inplace=True)
@@ -610,7 +706,7 @@ def make_6p(df, code, col_key='LOINC_NUM', sep='|', dtype='str'):
         return p6 # zip(LoincTable.p6, p6)
     return dict(zip(LoincTable.p6, p6))
 
-def t_loinc(**kargs):
+def demo_loinc(**kargs):
     from analyzer import load_loinc_table, sample_loinc_table
 
     df_loinc = load_loinc_table(dehyphenate=True) 
@@ -620,11 +716,37 @@ def t_loinc(**kargs):
         s = make_6p(df_loinc, code, dtype='dict')
         print("[{}] {}".format(code, s))
 
+    print("(demo_loinc) Compare LN and SN ...")
+    compare_short_long_names(codes=codes)
+
+    print("... Compare LN and MTRT ")
+    compare_longname_mtrt(codes=codes)
+
     pass
+
+def demo_feature_naming(**kargs):
+
+    dtypes = ['test_result_name', 'test_order_name', ]
+    colx = []
+    colm = []
+    for dtype in dtypes: 
+        cols = LoincTSet.get_sdist_matched_loinc_col_names(dtype, parts=['Component', 'System',], 
+               types=['Predicted', 'MatchDist'], metrics=['LV', 'JW'], throw=True)
+        colx.extend(cols)
+        print("> predicted | [{}] {}".format(dtype, cols))
+
+        cols = LoincTSet.get_sdist_mapped_col_names(dtype, metrics=['LV', 'JW'], throw=True)
+        colm.extend( cols )
+        print("> mapped    | [{}] {}".format(dtype, cols))
 
 def test(**kargs): 
 
-    t_loinc(**kargs)
+    # --- LOINC attributes
+    demo_loinc(**kargs)
+
+    # --- attribute naming 
+    demo_feature_naming()
+
     return
 
 if __name__ == "__main__":

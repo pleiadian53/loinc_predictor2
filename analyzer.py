@@ -10,6 +10,7 @@ from sklearn import metrics #Import scikit-learn metrics module for accuracy cal
 
 from tabulate import tabulate
 import common
+import data_processor as dproc
 
 from utils_plot import saveFig # contains "matplotlib.use('Agg')" which needs to be called before pyplot 
 from matplotlib import pyplot as plt
@@ -46,14 +47,49 @@ def summarize_loinc(codes, df=None, col="test_result_loinc_code", n=10, codebook
                 dfc = df.loc[df[col] == code]
                 print("[{}] n={}".format(code, dfc.shape[0]))
     return
-       
-def col_values(df, col='age', n=10, mode='sampling', random_state=1):
 
-    if mode.startswith('s'): 
+def col_values_by_codes(codes, df=None, cols=['test_result_name', 'test_order_name'], **kargs):
+    cohort = kargs.get('cohort', 'hepatitis-c')
+    verbose = kargs.get('verbose', 1)
+    mode = kargs.get('mode', 'raw')   # {'raw', 'unique', 'sample'}
+    n_samples = kargs.get('n', 10)
+
+    col_target = 'test_result_loinc_code'
+    if df is None: 
+        processed = kargs.get('processed', True)
+        canonicalized = kargs.get('canonicalized', True)
+        df = load_src_data(cohort=cohort, warn_bad_lines=False, canonicalized=canonicalized, processed=processed)
+
+    df = df.loc[df[col_target].isin(codes)]
+    print("(data) Given codes (n={}), we get N={} rows from the training data.".format(len(codes), df.shape[0]))
+    
+    adict = {}
+    for col in cols: 
+        if mode.startswith('r'):  # raw, as it is
+            adict[col] = df[col].values
+        elif mode.startswith('u'):
+            adict[col] = df[col].unique()
+        else: 
+            adict[col] = df.sample(n=n_samples, random_state=kargs.get('random_state', 53))[col].values
+    return adict
+       
+def col_values2(df, cols=[], n=10, mode='sampling', random_state=1, keep='last'):
+    # similar to col_values but returns dataframe instead of Series or np.array
+    if mode.startswith( ('s', 'r') ):  # sampling, random
+        n = min(n, df.shape[0])
+        return df.sample(n=n, random_state=random_state)[cols]
+    elif mode.startswith('u'):  # unique values
+        return df[cols].drop_duplicates(keep=keep)
+    return df.sample(n=n, random_state=random_state)[cols]
+
+def col_values(df, col='age', n=10, mode='sampling', random_state=1):
+    if mode.startswith( ('s', 'r') ):  # sampling, random
+        n = min(n, df.shape[0])
         return df.sample(n=n, random_state=random_state)[col].values
     elif mode.startswith('u'):  # unique values
         return df[col].unique()
     return df.sample(n=n, random_state=random_state)[col].values
+
 def sample_col_values(df, col='age', n=10, random_state=1):
     return col_values(df, col=col, n=n, random_state=random_state, mode='sampling')
 
@@ -399,102 +435,15 @@ def analyze_path(X, y, model=None, p_grid={}, feature_set=[], n_trials=100, n_tr
 ### I/O Utilities ###
 
 def save_generic(df, cohort='', dtype='ts', output_file='', sep=',', **kargs):
-    output_dir = kargs.get('output_dir', os.path.join(os.getcwd(), 'data')) 
-    verbose=kargs.get('verbose', 1)
-    if not output_file: 
-        if cohort: 
-            output_file = f"{dtype}-{cohort}.csv" 
-        else: 
-            output_file = "test.csv"
-    output_path = os.path.join(output_dir, output_file)
-
-    df.to_csv(output_path, sep=sep, index=False, header=True)
-    if verbose: print("(save_generic) Saved dataframe (dim={}) to:\n{}\n".format(df.shape, output_path))
-    return  
+    return dproc.save_generic(df, cohort=cohort, dtype=dtype, output_file=output_file, sep=sep, **kargs)
 def load_generic(cohort='', dtype='ts', input_file='', sep=',', **kargs):
-    input_dir = kargs.get('input_dir', os.path.join(os.getcwd(), 'data'))
-
-    warn_bad_lines = kargs.get('warn_bad_lines', True)
-    verbose=kargs.get('verbose', 1)
-    columns = kargs.get('columns', [])
-
-    if not input_file: 
-        if cohort: 
-            input_file = f"{dtype}-{cohort}.csv" 
-        else: 
-            input_file = "test.csv"
-    input_path = os.path.join(input_dir, input_file)
-
-    if os.path.exists(input_path) and os.path.getsize(input_path) > 0: 
-        df = pd.read_csv(input_path, sep=sep, header=0, index_col=None, error_bad_lines=False, warn_bad_lines=warn_bad_lines)
-        if verbose: print("(load_generic) Loaded dataframe (dim={}) from:\n{}\n".format(df.shape, input_path))
-    else: 
-        df = None
-        if verbose: print("(load_generic) No data found at:\n{}\n".format(input_path))
-
-    if len(columns) > 0: 
-        return df[columns]
-    return df  
+    return dproc.load_generic(cohort=cohort, dtype=dtype, input_file=input_file, sep=sep, **kargs)  
 
 def save_data(df, cohort='', output_file='', sep=',', **kargs): 
-    output_dir = kargs.get('output_dir', os.path.join(os.getcwd(), 'data'))
-    verbose=kargs.get('verbose', 1)
-    if not output_file: 
-        if cohort: 
-            output_file = f"ts-{cohort}.csv" 
-        else: 
-            output_file = "ts-generic.csv"
-    output_path = os.path.join(output_dir, output_file)
-
-    df.to_csv(output_path, sep=sep, index=False, header=True)
-    if verbose: print("(save_data) Saved dataframe (dim={}) to:\n{}\n".format(df.shape, output_path))
-    return
-
-def load_data0(input_file, **kargs): 
-    """
-
-    Memo
-    ----
-    1. Example datasets
-
-        a. multivariate imputation applied 
-            exposures-4yrs-merged-imputed.csv
-        b. rows with 'nan' dropped 
-            exposures-4yrs-merged.csv
-
-    """
-    import collections
-    import data_processor as dproc
-
-    X, y, features = dproc.load_data(input_path=dataDir, input_file=input_file, sep=',') # other params: input_path/None
-
-    print("(load_data) dim(X): {}, sample_size: {}".format(X.shape, X.shape[0]))
-
-    counts = collections.Counter(y)
-    print("... class distribution | classes: {} | sizes: {}".format(list(counts.keys()), counts))
-    print("... variables: {}".format(features))
-
-    return X, y, features
-
+    return dproc.save_data(df, cohort=cohort, output_file=output_file, sep=sep, **kargs)
 def load_data(cohort='', input_file='', sep=',', **kargs):
-    input_dir = kargs.get('input_dir', os.path.join(os.getcwd(), 'data'))
-    
-    warn_bad_lines = kargs.get('warn_bad_lines', True)
-    verbose=kargs.get('verbose', 1)
-    columns = kargs.get('columns', [])
-    if not input_file: 
-        if cohort: 
-            input_file = f"ts-{cohort}.csv" 
-        else: 
-            input_file = "ts-generic.csv"
-    input_path = os.path.join(input_dir, input_file)
+    return dproc.load_data(cohort=cohort, input_file=input_file, sep=sep, **kargs)
 
-    df = pd.read_csv(input_path, sep=sep, header=0, index_col=None, error_bad_lines=False, warn_bad_lines=warn_bad_lines)
-    if verbose: print("(load_data) Loaded dataframe (dim={}) from:\n{}\n".format(df.shape, input_path))
-    
-    if len(columns) > 0: 
-        return df[columns]
-    return df
 def load_data_incr(cohort='', input_file='', sep=',', **kargs): 
     input_dir = kargs.get('input_dir', os.path.join(os.getcwd(), 'data'))
     
@@ -518,16 +467,44 @@ def load_data_incr(cohort='', input_file='', sep=',', **kargs):
             yield dfi
 
 def load_src_data(cohort='hepatitis-c', **kargs): 
+    isProcessed = kargs.get('processed', True)
+    canonicalized = kargs.get('canonicalized', True)
+
     input_dir = kargs.get('input_dir', os.path.join(os.getcwd(), 'data')) 
-    input_file = f"andromeda-pond-{cohort}.csv" # "andromeda_pond-10p.csv"
+
+    if isProcessed: 
+        input_file = f"andromeda-pond-{cohort}-processed.csv" # "andromeda_pond-10p.csv" 
+    else:
+        input_file = f"andromeda-pond-{cohort}.csv" # "andromeda_pond-10p.csv"
     input_path = os.path.join(input_dir, input_file)
 
     warn_bad_lines = kargs.get('warn_bad_lines', True)
     columns = kargs.get('columns', [])
     df = pd.read_csv(input_path, sep=',', header=0, index_col=None, error_bad_lines=False, warn_bad_lines=warn_bad_lines)
 
+    if canonicalized: 
+        import loinc as lc
+        col_target = kargs.get('col_target', 'test_result_loinc_code')
+        token_default = token_missing = 'unknown'
+        df = df.drop_duplicates(keep='last')  # drop duplicates 
+        df = lc.canonicalize(df, col_target=col_target, token_missing=token_default) # noisy_values/[]
+
     if len(columns) > 0: 
         return df[columns]
+    return df
+
+def load_performance(input_dir='result', input_file='', **kargs):
+    cohort = kargs.get('cohort', 'hepatitis-c')
+    sep = kargs.get('sep', '|')
+
+    if not input_dir: input_dir = os.path.join(os.getcwd(), 'result') # os.path.join(os.getcwd(), 'result')
+    if not input_file: input_file = f"performance-{cohort}.csv" 
+    input_path = os.path.join(input_dir, input_file)
+    assert os.path.exists(input_path), "Invalid path: {}".format(input_path)
+
+    df = pd.read_csv(input_path, sep=sep, header=0, index_col=None, error_bad_lines=False)
+    print("> dim(performance matrix): {}".format(df.shape)) 
+
     return df
     
 def save_performnace(df, output_dir='result', output_file='', **kargs): 
@@ -546,21 +523,49 @@ def save_performnace(df, output_dir='result', output_file='', **kargs):
             print(f"[{code}] -> {score}")
     return
 
-def load_performance(input_dir='result', input_file='', **kargs):
-    cohort = kargs.get('cohort', 'hepatitis-c')
-    sep = kargs.get('sep', '|')
+def label_by_types(df=None, cohort='hepatitis-c', categories=[], processed=False, transformed_vars_only=True): 
+    """
+    Types of LOINC codes to predict according to the absence and presence of loinc codes and MTRT.
 
-    if not input_dir: input_dir = kargs.get('input_dir', 'result') # os.path.join(os.getcwd(), 'result')
-    if not input_file: input_file = f"performance-{cohort}.csv" 
-    input_path = os.path.join(input_dir, input_file)
-    assert os.path.exists(input_path), "Invalid path: {}".format(input_path)
+    Memo
+    ----
+    0: absent, 1: present
 
-    df = pd.read_csv(input_path, sep=sep, header=0, index_col=None, error_bad_lines=False)
-    print("> dim(performance matrix): {}".format(df.shape)) 
+    LOINC    MTRT    type 
+      1      1        I 
+      0      1        II
+      1.     0        III 
+      0.     0.       IV
 
-    return df
+    # heptatis C 
+    ... Type(1): N=67079
+    ... Type(2): N=0
+    ... Type(3): N=4145
+    ... Type(4): N=0
 
-def label_by_performance(cohort='hepatitis-c', th_low =0.50, th_high = 0.90, categories=[], verify=True, verbose=1): 
+
+    """
+    from loinc import LoincTSet
+    if df is None: 
+        df = load_src_data(cohort=cohort, warn_bad_lines=False, canonicalized=True, processed=processed)
+    
+    col_target = LoincTSet.col_target  # loinc codes as class labels
+    col_tag = LoincTSet.col_tag    # MTRTs as tags
+
+    adict = {}
+    adict[1] = df.loc[~df[col_target].isnull() & ~df[col_tag].isnull()].index.values
+    adict[2] = df.loc[df[col_target].isnull() & ~df[col_tag].isnull()].index.values
+    adict[3] = df.loc[~df[col_target].isnull() & df[col_tag].isnull()].index.values
+    adict[4] = df.loc[df[col_target].isnull() & df[col_tag].isnull()].index.values
+
+    if not transformed_vars_only: 
+        df['prediction_level'] = 1
+        for level in adict.keys(): 
+            df.loc[adict[level], 'prediction_level'] = level
+
+    return (df, adict)  # adict: holds entries to these different types of samples; as a return value only for convenience
+
+def label_by_performance(cohort='hepatitis-c', th_low=0.50, th_high=0.90, categories=[], verify=True, verbose=1): 
     """
     Classify loinc codes by their performance scores. 
     """
@@ -702,6 +707,14 @@ def sample_loinc_table(codes=[], cols=[], input_dir='LoincTable', input_file='',
 
     return adict
 
+def analyze_loinc_values(ccmap, cols=[], verbose=1, col_code='LOINC_NUM'):
+    """
+
+    Related
+    -------
+    analyze_feature_values
+    """
+    return  analyze_by_values(ccmap, cols=cols, verbose=verbose, col_code=col_code)
 def analyze_by_values(ccmap, cols=[], verbose=1, col_code=''): 
     """
     Input
@@ -723,7 +736,6 @@ def analyze_by_values(ccmap, cols=[], verbose=1, col_code=''):
 
     if not col_code: col_code = ul.LoincTable.col_key  # 'LOINC_NUM'
     
-
     target_cols = cols
     if len(cols) == 0: 
         
@@ -1030,75 +1042,9 @@ def balance_data_incr(df, df_extern, n_samples=-1, col='test_result_loinc_code',
     """
     Similar to balance_data() but expect df_extern to be huge (to a degree that may not fit into main memory)
     """
-    import loinc as ul
+    # some preliminary check here
 
-    n_baseline = n_samples
-    if n_baseline < 0: 
-        ds = stratify(df, col=col)
-        # use the median sample size as the standard sample size
-        n_baseline = int(np.median([e[1] for e in ds]))
-    print("(balance_data_incr) n_baseline={}".format(n_baseline))
-
-    # labels: all the possible class labels (e.g. LOINC codes) read from 'col' (e.g. test_result_loinc_code)
-    if len(labels) == 0: 
-        labels = set(df[col])
-
-        # verify the external data
-        if df_extern is not None or not df_extern.empty:
-            labels_external = set(df_extern[col])
-            print("(balance_data_incr) Found n={} unique codes from source | nc={} unique codes from external".format(
-                len(labels), len(labels_external)))
-
-            delta_l = list(set(labels_external)-set(labels))
-            print("... found {}=?=0 extra codes from the df_extern:\n{}\n".format(len(delta_l), delta_l[:20]))
-            labels_common = list(set(labels_external).intersection(labels))
-            print("... found {} common codes from the df_extern:\n{}\n".format(len(labels_common), labels_common[:20]))
-
-    N0 = df.shape[0]
-    assert df.shape[1] == df_extern.shape[1], "Inconsistent feature dimension: nf={} <> nf2={}".format(df.shape[1], df_extern.shape[1])
-
-    ###############################################
-    delta = {}
-    dfx = []
-    n_hit = n_miss = 0. # n_extra
-    hit, missed = set([]), set([])
-    for k, dfi in df.groupby([col, ]): 
-        if not k in labels: continue # don't add data if not in the target label set
-        if k in ul.LoincTSet.non_codes: continue  # don't add data if the classe is either 'unknown' or 'others'
-
-        ni = dfi.shape[0]
-        dfj = df_extern.loc[df_extern[col]==k]
-        nj = dfj.shape[0]
-
-        if nj == 0: # cannot find matching rows in df_extern
-            # print(f"(balance_training_data) Could not find code={r} in external data ... !!!")
-            missed.add(k)
-            # if verbose and len(missed)%50==0: 
-            #     print("(balance_data_incr) Could not find cases in external for code={} (n={})... #".format(k, len(missed)))
-        else: 
-            hit.add(k)
-
-            if n_baseline > ni: 
-                delta = n_baseline-ni
-                dfx.append( dfj.sample(n=min(delta, nj)) ) 
-
-                if verbose and len(hit) % 25 == 0: 
-                    print("(balance_data_incr) Added n={} cases to code={}".format(dfx[-1].shape[0], k))
-    
-    if verbose: 
-        print("(balance_data_incr) Added n={} cases in total | n_miss:{} ... #".format(len(hit), len(missed))) # [debug] somehow the values got cast to float
-        print("... missed (n={}):\n{}\n".format(len(missed), list(missed)[:20]))
-        print("... hit (n={}):\n{}\n".format(len(hit), list(hit)[:20]))
-
-    df_incr = DataFrame(columns=df.columns)
-    if len(dfx) > 0: 
-        df_incr = pd.concat(dfx, ignore_index=True)
-        # df = pd.concat([df, df_extra], ignore_index=True)
-
-    if verbose: 
-        print("(balance_data) N_extra: {}".format(df_incr.shape[0])) 
-
-    return df_incr, list(hit), list(missed)
+    return dproc.balance_data_incr(df, df_extern, n_samples=n_samples, col=col, labels=labels, verbose=verbose, **kargs)
 
 def balance_data(df, df2=None, n_samples=-1, col='test_result_loinc_code', labels=[], verbose=1): 
     """
@@ -1109,256 +1055,297 @@ def balance_data(df, df2=None, n_samples=-1, col='test_result_loinc_code', label
     df: Input dataframe whose columns contain both features/variables and class labels
 
     """
-    if n_samples < 0: 
-        ds = stratify(df, col=col)
-        # use the median sample size as the standard sample size
-        n_samples = int(np.median([e[1] for e in ds]))
-    print("(balance_data) n_samples={}".format(n_samples))
-
-    # target labels from the given 'col'
-    if len(labels) == 0: 
-        labels = set(df[col])
-
-        if df2 is not None or not df2.empty:
-            labels_external = set(df2[col])
-            print("(balance_data) Found n={} unique codes from source | nc={} unique codes from external".format(
-                len(labels), len(labels_external)))
-        
-    N0 = df.shape[0]
-
-    if verbose: 
-        labels = np.random.choice(df[col].unique(), 30)
-        print("(balance_data) example labels:\n{}\n".format(list(labels)))
-        if df2 is not None or not df2.empty: 
-            labels2 = np.random.choice(df2[col].unique(), 30)
-            print("(balance_data) example labels from supplement data:\n{}\n".format(list(labels2)))
-    
-    dfx = []
-    if df2 is None or df2.empty: # Case 1: Balance within the original training data (df) without additional data (df2)
-    
-        for r, df in df.groupby([col, ]): 
-            n = df.shape[0]
-            if n > n_samples: 
-                dfx.append( df.sample(n=n_samples) )
-            else: 
-                dfx.append( df )
-
-        df = pd.concat(dfx, ignore_index=True)
-    else: ## case 2: Balance with additional training data (df2)
-        assert df.shape[1] == df2.shape[1], "Inconsistent feature dimension: nf={} <> nf2={}".format(df.shape[1], df2.shape[1])
-
-        delta = {}
-        dfx = []
-        n_hit = n_miss = 0. # n_extra
-        hit, missed = [], []
-        for r, dfi in df.groupby([col, ]): 
-            if not r in labels: continue
-
-            n = dfi.shape[0]
-
-            dfc = df2.loc[df2[col]==r]
-            nc = dfc.shape[0]
-            if nc == 0: 
-                n_miss += 1
-                # print(f"(balance_training_data) Could not find code={r} in external data ... !!!")
-                missed.append(r)
-            else: 
-                hit.append(r)
-            
-            if n >= n_samples: 
-                pass # no need to add data 
-                # delta[r] = 0
-            else: 
-                delta = n_samples-n
-
-                if nc > 0: 
-                    # delta[r] = n_samples-n
-                    dfx.append( dfc.sample(n=min(delta, nc)) )
-                    n_hit += 1 
-
-                    if verbose and n_hit < 20: 
-                        print("(balance_data) Added n={} cases to code={}".format(dfx[-1].shape[0], r))
-                else: 
-                    print(f"... Could not find cases in external for code={r} ... #")
-        
-        print("(balance_data) Added n={} cases in total | n_miss:{} ... #".format(n_hit, n_miss)) # [debug] somehow the values got cast to float
-        print(f"... missed:\n{missed}\n")
-        print(f"... hit:\n{hit}\n")
-
-        if len(dfx) > 0: 
-            df_extra = pd.concat(dfx, ignore_index=True)
-            df = pd.concat([df, df_extra], ignore_index=True)
-
-        if verbose: 
-            print("(balance_data) N: {} => {}".format(N0, df.shape[0])) 
-
-    return df
+    return dproc.balance_data(df, df2=df2, n_samples=n_samples, col=col, labels=labels, verbose=verbose)
 
 
 ########################################
-
 def plot_barh(perf, metric='fmax', **kargs): 
-    """
+    return evaluate.plot_barh(perf, metric=metric, **kargs)
 
-    Reference
-    ---------
-    1. bar annotation  
-        + http://robertmitchellv.com/blog-bar-chart-annotations-pandas-mpl.html
-
-        + Annotate bars with values on Pandas bar plots
-            https://stackoverflow.com/questions/25447700/annotate-bars-with-values-on-pandas-bar-plots
-
-            <idiom> 
-            for p in ax.patches:
-                ax.annotate(str(p.get_height()), (p.get_x() * 1.005, p.get_height() * 1.005))
-
-        + adding value labels on a matplotlib bar chart
-            https://stackoverflow.com/questions/28931224/adding-value-labels-on-a-matplotlib-bar-chart
-
-    2. colors:  
-        + https://stackoverflow.com/questions/11927715/how-to-give-a-pandas-matplotlib-bar-graph-custom-colors
-
-        + color map
-          https://stackoverflow.com/questions/18926031/how-to-extract-a-subset-of-a-colormap-as-a-new-colormap-in-matplotlib
-
-        + creating custom colormap: 
-            https://matplotlib.org/examples/pylab_examples/custom_cmap.html
-
-    3. fonts: 
-        http://jonathansoma.com/lede/data-studio/matplotlib/changing-fonts-in-matplotlib/
-    """
-    from utils_plot import truncate_colormap 
-    from itertools import cycle, islice
-    import matplotlib.colors as colors
-    from matplotlib import cm
-
-    # perf: PerformanceMetrics object
-
-    plt.clf()
-
-    # performance metric vs methods
-    codes = kargs.get('codes', [])  # [] to plot all codes
-
-    # perf_methods
-    perf_codes = perf.table.loc[metric] if not methods else perf.table.loc[metric][methods]  # a Series
-    if kargs.get('sort', True): 
-        perf_methods = perf_methods.sort_values(ascending=kargs.get('ascending', False))
-
-    # default configuration for plots
-    matplotlib.rcParams['figure.figsize'] = (10, 20)
-    matplotlib.rcParams['font.family'] = "sans-serif"
-
-    # canonicalize the method/algorithm name [todo]
-
-    # coloring 
-    # cmap values: {'gnuplot2', 'jet', }  # ... see demo/coloarmaps_refeference.py
-    ####################################################################
-    # >>> change coloring options here
-    option = 2
-    if option == 1: 
-        cmap = truncate_colormap(plt.get_cmap('jet'), 0.2, 0.8) # params: minval=0.0, maxval=1.0, n=100)
-
-        # fontsize: Font size for xticks and yticks
-        ax = perf_methods.plot(kind=kargs.get('kind', "barh"), colormap=plt.get_cmap('gnuplot2'), fontsize=12)  # colormap=cmap 
-    elif option == 2: 
-        # Make a list by cycling through the desired colors to match the length of your data
-        
-        # methods_colors = list(islice(cycle(['b', 'r', 'g', 'y', 'k']), None, len(perf_methods)))
-        if 'color_indices' in kargs: 
-            method_colors = kargs['color_indices']
-        else: 
-            n_models = len(perf_methods)
-            method_colors = cm.gnuplot2(np.linspace(.2,.8, n_models+1))  # this is a 2D array
-
-        ax = perf_methods.plot(kind=kargs.get('kind', "barh"), color=method_colors, fontsize=12)  # colormap=cmap 
-    elif option == 3:  # fixed color 
-        # my_colors = ['g', 'b']*5 # <-- this concatenates the list to itself 5 times.
-        # my_colors = [(0.5,0.4,0.5), (0.75, 0.75, 0.25)]*5 # <-- make two custom RGBs and repeat/alternate them over all the bar elements.
-        method_colors = [(x/10.0, x/20.0, 0.75) for x in range(len(perf_methods))] # <-- Quick gradient example along the Red/Green dimensions.
-        ax = perf_methods.plot(kind=kargs.get('kind', "barh"), color=method_colors, fontsize=12)  # colormap=cmap 
-    ####################################################################
-
-    # title 
-    x_label = '%s scores' % metric.upper()
-    y_label = "LOINC in descending order of performance"
-    ax.set_xlabel(x_label, fontname='Arial', fontsize=12) # color='coral'
-    ax.set_ylabel(y_label, fontname="Arial", fontsize=12)
+def compare_col_values(df, cols, n=10, mode='sampling', verbose=1, random_state=53):   
+    df = col_values2(df, cols=cols, n=n, mode=mode, random_state=random_state, keep='last')
     
-    ## annotate the bars
-    # Make some labels.
-    labels = scores = perf_methods.values
-    min_abs, max_abs = kargs.get('min', 0.0), kargs.get('max', 1.0)
-    min_val, max_val = np.min(scores), np.max(scores)
-    epsilon = 0.1 
-    min_x, max_x = max(min_abs, min_val-epsilon), min(max_abs, max_val+epsilon)
+    if mode.startswith(('s', 'r')): assert df.shape[0] <=n, "dim(df): {}".format(df)
 
-    # [todo] set upperbound according to the max score
-    ax.set_xlim(min_x, max_x)
+    adict = {col:[] for col in cols}
+    for i, (r, row) in enumerate(df.iterrows()): 
+        msg = "[{}] iloc={}, cols={}\n".format(i+1, r, cols)
+        for col in cols: 
+            adict[col].append(row[col])
+            msg += "    + {}: {}\n".format(col, row[col])
+        if verbose: print(msg)
+    return adict
 
-    # annotation option
-    option = 1
-    if option == 1: 
-        for i, rect in enumerate(ax.patches):
-            x_val = rect.get_x()
-            y_val = rect.get_y()
+def inspect_col_values(df, cols, mode='unique', verbose=1):
 
-            # if i % 2 == 0: 
-            #     print('... x, y = %f, %f  | width: %f, height: %f' % (x_val, y_val, rect.get_width(), rect.get_height()))   # [log] x = 0 all the way? why? rect.get_height = 0.5 all the way
-            # get_width pulls left or right; get_y pushes up or down
-            # memo: get_width() in units of x ticks
-            assert rect.get_width()-scores[i] < 1e-3
-
-            width = rect.get_width()
-            # lx_offset = width + width/100. 
-
-            label = "{:.3f}".format(scores[i])
-            ax.text(rect.get_width()+0.008, rect.get_y()+0.08, \
-                    label, fontsize=8, color='dimgrey')
-    elif option == 2: 
-        # For each bar: Place a label
-        for i, rect in enumerate(ax.patches):
-            # Get X and Y placement of label from rect.
-            y_value = rect.get_y()  # method  ... rect.get_height()
-            x_value = rect.get_x()  # score
-
-            # Number of points between bar and label. Change to your liking.
-            space = 5
-
-            # Use Y value as label and format number with one decimal place
-            label = "{:.2f}".format(x_value) # "{:.1f}".format(y_value)
-
-            # Create annotation
-            plt.annotate(
-                label,                      # Use `label` as label
-                (x_value, y_value),         # Place label at end of the bar
-                xytext=(0, space),          # Vertically shift label by `space`
-                textcoords="offset points", # Interpret `xytext` as offset in points
-                ha='center',                # Horizontally center label
-                va='center')                      # Vertically align label differently for
-                #                             # positive and negative values.
-
-    # invert for largest on top 
-    # ax.invert_yaxis()  # 
-
-    plt.yticks(fontsize=8)
-    plt.title("Performance Comparison In %s" % metric.upper(), fontname='Arial', fontsize=15) # fontname='Comic Sans MS'
-
-    n_methods = perf.n_methods()
+    adict = {}
+    msg = ""
+    for i, col in enumerate(cols): 
+        adict[col] = col_values(df, col=col, mode=mode)
+        msg += f"[{i}] {col}\n"
+        msg += "       + n={}: {{ {} }}\n".format(len(adict[col]), adict[col])
+    if verbose: 
+        print(msg)
     
-    # need to distinguish the data set on which algorithms operate
-    domain = perf.query('domain')
-    if domain == 'null': 
-        assert 'domain' in kargs
-        domain = kargs['domain']
+    return adict
 
-    file_name = kargs.get('file_name', '{metric}_comparison-N{size}-D{domain}'.format(metric=metric, size=n_methods, domain=domain))  # no need to specify file type
-    if 'index' in kargs: 
-        file_name = '{prefix}-{index}'.format(prefix=file_name, index=kargs['index'])
-    saveFig(plt, PerformanceMetrics.plot_path(name=file_name), dpi=300)  # basedir=PerformanceMetrics.plot_path
+def analyze_loinc_table(**kargs):
+    # from analyzer import load_loinc_table, sample_loinc_table
+    import loinc as lc
+    from loinc import LoincMTRT
+
+    cols_6p = lc.LoincTable.cols_6p # ["COMPONENT","PROPERTY","TIME_ASPCT","SYSTEM","SCALE_TYP","METHOD_TYP"]   # CLASS
+    col_code = 'LOINC_NUM'
+
+    df_loinc = load_loinc_table(dehyphenate=True)
+    print("(loinc_table):\n{}\n".format(list(df_loinc.columns.values)))
+
+    # assert sum(1 for col in cols_6p if not col in df_loinc.columns) == 0  # ... ok
+    
+    codes_src = set(df_loinc[col_code].values)
+    print("(loinc_table) Number of unique loinc codes: {}".format( len(codes_src)) )
+
+    ### Q: what are all the possible values for earch of the the 6-part represention of LOINC codes? 
+    inspect_col_values(df_loinc, cols_6p, mode='unique', verbose=1)
+
+    ### long vs short names
+    cohort = 'hepatitis-c'
+    df_perf = load_performance(input_dir='result', cohort=cohort)
+    codes_low_sz = df_perf.loc[df_perf['mean'] < 0]['code'].values
+
+    D_loinc = lc.compare_short_long_names(df_loinc, codes=codes_low_sz, n_display=30, verbose=1)
+
+    ### mtrt vs long name 
+    # df_mtrt = LoincMTRT.load_loinc_to_mtrt(input_file='loinc-leela.csv')
+    D_mtrt = lc.compare_longname_mtrt(n_display=30, codes=codes_low_sz)
+
+    print("[analysis] Can component and system alone uniquely identify most LOINC codes?")
+
+    Dg = lc.group_by(df_loinc=df_loinc, cols=['COMPONENT', 'SYSTEM',])
+    
 
     return
 
-def t_io(**kargs):
+def compare_test_with_6parts(codes=[], df=None, df_loinc=None, 
+        col_code='test_result_loinc_code', n_samples=-1, target_test_cols=[], **kargs):
+    import loinc as lc
+
+    verbose = kargs.get('verbose', 1)
+    cohort = kargs.get('cohort', "hepatitis-c")
+    processed = kargs.get('processed', True)
+    if df is None: 
+        # df = load_data(input_file=f'andromeda-pond-{cohort}.csv', warn_bad_lines=False, canonicalized=True)
+        df = load_src_data(cohort=cohort, warn_bad_lines=False, canonicalized=True, processed=processed)
+
+    if df_loinc is None: df_loinc = load_loinc_table(dehyphenate=True)
+
+    if not target_test_cols: target_test_cols = ['test_order_name', 'test_result_name']
+
+    if not codes: 
+        ucodes = df[col_code].unique()
+        if n_samples > 0: 
+            codes = np.random.choice(ucodes, min(n_samples, len(ucodes))) 
+        else: 
+            codes = ucodes  # all unique codes
+    if verbose: print("(compare_test_with_6parts) Targeting n={} codes:\n{} ... #\n".format(len(codes), codes[:100]))
+
+    D = lc.compare_6parts(df_loinc, codes=codes, verbose=1)  # n_samples/-1
+        
+    for code in codes: 
+        if code in D: 
+            dfc = df.loc[df[col_code] == code]
+            assert not dfc.empty
+
+            row = dfc.sample(n=1)
+            for col in target_test_cols: 
+                D[code][col] = row[col].iloc[0]
+
+    ######################################################
+    if verbose:
+        target_codes = list(D.keys())
+        cols_key = ['code', ]
+        cols_6p = ['COMPONENT', 'SYSTEM']
+        cols_loinc_names = ['SHORTNAME', 'LONG_COMMON_NAME'] 
+        target_cols = target_test_cols + cols_6p + cols_loinc_names
+        adict = {col: [] for col in (cols_key+target_cols)}
+            
+        # display contents in terms of a dataframe
+        for code in target_codes: 
+            adict['code'].append(code)
+            for tc in target_cols: 
+                adict[tc].append(D[code][tc]) 
+        
+        df = DataFrame(adict, columns=cols_key+target_cols)
+
+        cols_part0 = cols_key + target_test_cols
+        cols_part1 = cols_key + cols_6p + ['SHORTNAME', ]
+        cols_part2 = cols_key + cols_loinc_names
+        print("(compare_test_with_6parts) {} (part0):\n{}\n".format(target_cols, 
+            tabulate(df[cols_part0], headers='keys', tablefmt='psql'))) # df[cols_part1].to_string(index=False))) # tabulate(df, headers='keys', tablefmt='psql')
+        
+        print("... {} (part1):\n{}\n".format(target_cols,
+            tabulate(df[cols_part1], headers='keys', tablefmt='psql')))
+        print("... {} (part2):\n{}\n".format(target_cols,
+            tabulate(df[cols_part2], headers='keys', tablefmt='psql')))
+        
+    return D
+
+def analyze_data_set(**kargs):
+
+    cohort = 'hepatitis-c'
+    verbose = 1
+    # andromeda-pond-hepatitis-c-balanced.csv has illed-formed data
+    col_target = "test_result_loinc_code"
+    col_tag = 'medivo_test_result_type'
+    token_default = 'unknown'
+
+    # df = load_data(input_file='andromeda-pond-hepatitis-c-processed.csv', warn_bad_lines=False, canonicalized=True)
+    df = load_src_data(cohort=cohort, warn_bad_lines=False, canonicalized=True, processed=True)
+    N0 = df.shape[0]
+    # ... if canonicalized <- True => call canonicalize(): fill n/a + dehyphenate + replace_values + trim_tail + fill others (non-target classes)
+    
+    # summarize_dataframe(df, n=1)
+    # print("-" * 50 + "\n")
+
+    # target_cols = ['meta_sender_name', 'test_order_name', 'test_specimen_type', ]
+    # print(f"(analyze_data_set) Inspecting {target_cols} ...")
+    # inspect_col_values(df, target_cols, mode='unique', verbose=1)
+
+    # --- analyze the relationship between test properties (e.g. test_order_name) and LOINC code properties
+
+    print("[analysis] Now compare test_order_name, test_result_name ... etc.")
+    # compare_test_with_6parts(df=df, n_samples=30)
+
+    compare_test_with_6parts(df=df, n_samples=20, target_test_cols=['test_order_name', 'test_result_name', 'medivo_test_result_type'])
+
+    # --- MTRT vs LOINC codes 
+    # Given MTRT
+    df_mtrt = df.loc[~df[col_tag].isnull()]
+    N_mtrt = df_mtrt.shape[0]
+    print("[analysis] N_mtrt={}, n(total)={} | ratio: {}".format(N_mtrt, N0, N_mtrt/(N0+0.0)))
+    df_mtrt_loinc = df_mtrt.loc[~df_mtrt[col_target].isnull()]
+    df_mtrt_no_loinc = df_mtrt.loc[df_mtrt[col_target].isnull()]
+    df_mtrt_TO = df_mtrt.loc[~df_mtrt['test_order_name'].isnull()]
+    df_mtrt_TR = df_mtrt.loc[~df_mtrt['test_result_name'].isnull()]
+    df_mtrt_TC = df_mtrt.loc[~df_mtrt['test_result_comments'].isnull()]
+    print("... N(mtrt & loinc) ={}, N={} | ratio: {}".format(df_mtrt_loinc.shape[0], N_mtrt, df_mtrt_loinc.shape[0]/(N_mtrt+0.0)))
+    print("... N(mtrt & ~loinc)={}, N={} | ratio: {}".format(df_mtrt_no_loinc.shape[0], N_mtrt, df_mtrt_no_loinc.shape[0]/(N_mtrt+0.0) ))
+    ##########################
+    print("... N(mtrt & TO) ={}, n(mtrt)={} | ratio: {}".format(df_mtrt_TO.shape[0], N_mtrt, df_mtrt_TO.shape[0]/(N_mtrt+0.0) ))
+    print("... N(mtrt & TR) ={}, n(mtrt)={} | ratio: {}".format(df_mtrt_TR.shape[0], N_mtrt, df_mtrt_TR.shape[0]/(N_mtrt+0.0) ))
+    print("... N(mtrt & TC) ={}, n(mtrt)={} | ratio: {}".format(df_mtrt_TC.shape[0], N_mtrt, df_mtrt_TC.shape[0]/(N_mtrt+0.0) ))
+
+
+    # --- MTRT vs result comments
+    print("[anaysis] When MTRT is missing, what else do we usually have among test_order_name, test_result_name, *test_result_comments?")
+    df_no_mtrt = df.loc[df[col_tag].isnull()]   
+    N_mtrt_none = df_no_mtrt.shape[0]
+    df_no_mtrt_TO = df_no_mtrt.loc[~df_no_mtrt['test_order_name'].isnull()]
+    df_no_mtrt_TR = df_no_mtrt.loc[~df_no_mtrt['test_result_name'].isnull()]
+    df_no_mtrt_TC = df_no_mtrt.loc[~df_no_mtrt['test_result_comments'].isnull()]
+    print("... N(mtrt_none & TO) ={}, n(mtrt_none)={} | ratio: {}".format(df_no_mtrt_TO.shape[0], N_mtrt_none, df_no_mtrt_TO.shape[0]/(N_mtrt_none+0.0) ))
+    print("... N(mtrt_none & TR) ={}, n(mtrt_none)={} | ratio: {}".format(df_no_mtrt_TR.shape[0], N_mtrt_none, df_no_mtrt_TR.shape[0]/(N_mtrt_none+0.0) ))
+    print("... N(mtrt_none & TC) ={}, n(mtrt_none)={} | ratio: {}".format(df_no_mtrt_TC.shape[0], N_mtrt_none, df_no_mtrt_TC.shape[0]/(N_mtrt_none+0.0) ))
+
+    
+    # --- Level of difficulty
+    df, adict = label_by_types(df=df, cohort=cohort, transformed_vars_only=False)
+    msg = ''
+    for k, row_ids in adict.items(): 
+        # msg = 'LOINC(1), MTRT(1)'
+        print("... Type({}): N={}".format(k, len(row_ids)))
+
+    # --- group by 
+    # dproc.group_by(df, cols=['test_result_code', 'test_result_name',], verbose=1, n_samples=10)
+
+    # ... which groups correspond to which LOINC codes? 
+    # dproc.map_group_to_label(df, cols=['test_result_code', 'test_result_name',], verbose=1, n_samples=-1)
+
+    return df
+
+def analyze_hard_cases(**kargs):
+    """
+    Analyze hard cases (loinc codes), for which classifier-based approach performed poorly. 
+    Hard cases include those with low sample sizes. 
+
+    """ 
+    from utils_sys import size_hashtable
+    
+    cohort = 'hepatitis-c'
+    col_target = 'test_result_loinc_code'
+    categories = ['easy', 'hard', 'low']  # low: low sample size
+    ccmap = label_by_performance(cohort=cohort, categories=categories)
+    N = size_hashtable(ccmap)
+    N_easy = len(ccmap['easy'])
+    N_hard = len(ccmap['hard'])
+    N_low = len(ccmap['low'])
+    print("[analysis] N(codes; cohort={}): {}".format(cohort, N))
+    print("...        n(easy): {} | ratio: {}".format(N_easy, N_easy/(N+0.0)))
+    print("...        n(hard): {} | ratio: {}".format(N_hard, N_hard/(N+0.0)))
+    print("...        n(low):  {} | ratio: {}".format(N_low,  N_low/(N+0.0)))
+
+    # a dictionary of LOINC table dataframes indexed by analysis categories (e.g. easy, hard)
+    compare_test_with_6parts(code=ccmap['low'], n_samples=30, target_test_cols=['test_order_name', 'test_result_name']) 
+
+    # --- Get text data for the hard cases from 'test_order_name', 'test_result_name', 'test_result_comments', ... 
+    codes_low_sz = ccmap['low']
+    dfp = load_src_data(cohort='hepatitis-c', warn_bad_lines=False, canonicalized=True, processed=True)
+    dim0 = dfp.shape
+    dfp = dfp.loc[dfp[col_target].isin(codes_low_sz)]
+    print("[analysis] dim(df)<low sample size>: {} | dim(df)<original>: {}".format(dfp.shape, dim0))
+    
+    return
+
+def analyze_feature_values():
+    """
+
+    Related
+    -------
+    analyze_loinc_values()
+    """
+    from utils_sys import size_hashtable
+
+    cohort = 'hepatitis-c'
+    col_target = 'test_result_loinc_code'
+    categories = ['easy', 'hard', 'low']  # low: low sample size
+    ccmap = label_by_performance(cohort=cohort, categories=categories)
+    N = size_hashtable(ccmap)
+    N_easy = len(ccmap['easy'])
+    N_hard = len(ccmap['hard'])
+    N_low = len(ccmap['low'])
+
+    target_cols = ['test_order_name', 'test_result_name', ]
+    # target_cols = ['test_order_name', 'TestOrderMapJW', 'TOPredictedComponentJW', 'TOMatchDistComponentJW',]
+
+    for col in target_cols: 
+        input_file = f'{col}-sdist-vars.csv'
+        df = load_generic(input_file=input_file, sep=',')
+        print("(analysis) col: {} dim(input_df): {} ...".format(col, df.shape))
+
+        if df is not None and not df.empty: 
+            cols_template = [col, 'MapJW', 'PredictedComponentJW', 'MatchDistComponentJW', ]
+           
+            target_cols = []
+            for col in df.columns: 
+                tMatched = False
+                for ct in cols_template: 
+                    if col.find(ct) >= 0: 
+                        tMatched = True
+                        break
+                if tMatched: 
+                    target_cols.append(col)
+            # ... target_cols determined 
+            compare_col_values(df, target_cols, n=50, mode='sampling', verbose=1, random_state=53)
+
+    return
+
+def analyze_missing_cases(df, **kargs):
+    pass
+
+########################################################################
+# --- Example Usage and Test Cases
+
+def demo_io(**kargs):
 
     cohort = 'hepatitis-c'
     # MTRT dataframe / training data
@@ -1366,7 +1353,7 @@ def t_io(**kargs):
 
     return
 
-def t_performance(**kargs): 
+def demo_performance(**kargs): 
     from sklearn.datasets import load_iris
 
     X, y = load_iris(return_X_y=True)
@@ -1381,7 +1368,7 @@ def t_performance(**kargs):
 
     return scores 
 
-def t_performance_stats(**kargs):
+def demo_performance_stats(**kargs):
     categories = ['easy', 'hard', 'low']  # low: low sample size
 
     ccmap = label_by_performance(cohort='hepatitis-c', categories=categories)
@@ -1391,7 +1378,7 @@ def t_performance_stats(**kargs):
 
     return 
 
-def t_stratify(**kargs): 
+def demo_stratify(**kargs): 
     import sys
     from transformer import to_age
     # from loinc import canonicalize
@@ -1409,8 +1396,6 @@ def t_stratify(**kargs):
     # ... list of 2-tuples: [(code<i>, count<i>) ... ]
     max_size = np.max(df_perf['n_pos'].values)
     print("(t_stratify) control class sample size to be: {}".format(max_size))
-
-    
 
     # load training data 
     # cohort = 'loinc-hepatitis-c'
@@ -1519,7 +1504,7 @@ def t_stratify(**kargs):
 
     return
 
-def t_loinc(**kargs):
+def demo_loinc(**kargs):
     from transformer import dehyphenate, trim_tail, replace_values
 
     df = load_src_data(cohort='hepatitis-c') 
@@ -1558,86 +1543,36 @@ def t_loinc(**kargs):
 
     return
 
-def inspect_col_values(df, cols, mode='unique', verbose=1):
-
-    adict = {}
-    msg = ""
-    for i, col in enumerate(cols): 
-        adict[col] = col_values(df, col=col, mode=mode)
-        msg += f"[{i}] {col}\n"
-        msg += "       + n={}: {{ {} }}\n".format(len(adict[col]), adict[col])
-    if verbose: 
-        print(msg)
-    
-    return adict
-
-def analyze_loinc_table(**kargs):
-    # from analyzer import load_loinc_table, sample_loinc_table
-    import loinc as lc
-    from loinc import LoincMTRT
-
-    cols_6p = ["COMPONENT","PROPERTY","TIME_ASPCT","SYSTEM","SCALE_TYP","METHOD_TYP"]   # CLASS
-    col_code = 'LOINC_NUM'
-
-    df_loinc = load_loinc_table(dehyphenate=True)
-    print("(loinc_table):\n{}\n".format(list(df_loinc.columns.values)))
-
-    # assert sum(1 for col in cols_6p if not col in df_loinc.columns) == 0  # ... ok
-    
-    codes_src = set(df_loinc[col_code].values)
-    print("(loinc_table) Number of unique loinc codes: {}".format( len(codes_src)) )
-
-    ### Q: what are all the possible values for earch of the the 6-part represention of LOINC codes? 
-    inspect_col_values(df_loinc, cols_6p, mode='unique', verbose=1)
-
-    ### long vs short names
-    cohort = 'hepatitis-c'
-    df_perf = load_performance(input_dir='result', cohort=cohort)
-    codes_low_sz = df_perf.loc[df_perf['mean'] < 0]['code'].values
-
-    D_loinc = lc.compare_short_long_names(df_loinc, codes=codes_low_sz, n_display=30, verbose=1)
-
-    ### mtrt vs long name 
-    # df_mtrt = LoincMTRT.load_loinc_to_mtrt(input_file='loinc-leela.csv')
-    D_mtrt = lc.compare_longname_mtrt(n_display=30, codes=codes_low_sz)
-    
-
-    return
-
-def analyze_data_set(**kargs):
-
-    # andromeda-pond-hepatitis-c-balanced.csv has illed-formed data
-
-    df= load_data(input_file='andromeda-pond-hepatitis-c.csv', warn_bad_lines=False)
-    summarize_dataframe(df, n=1)
-    print("-" * 50 + "\n")
-
-    target_cols = ['meta_sender_name', 'test_order_name', 'test_specimen_type', ]
-    print(f"(analyze_data_set) Inspecting {target_cols} ...")
-    inspect_col_values(df, target_cols, mode='unique', verbose=1)
-
-    return
-
 def test(**kargs):
+    subjects = ['feature', ] # {'table', 'ts'/'data', 'hard', 'feature'/'vars'}
+    verbose = 1
 
-    ### I/O operations
-    # t_io(**kargs)
+    for subject in subjects: 
+        ### I/O operations
+        # demo_io(**kargs)
 
-    ### Analyze training data 
-    analyze_data_set()
+        ### Analyze training data 
+        if subject.startswith(('d', 'ts')): 
+            analyze_data_set()
 
-    ### Stratigy training data 
-    # t_stratify()   # ... ok 
+        ### Stratigy training data 
+        # demo_stratify()   # ... ok 
 
-    ### Predictive performance
-    # t_performance(**kargs)
-    # t_performance_stats(**kargs)
+        ### Predictive performance
+        # demo_performance(**kargs)
+        # demo_performance_stats(**kargs)
 
-    ### LOINC codes analysis
-    # t_loinc(**kargs)
+        ### LOINC codes analysis
+        # demo_loinc(**kargs)
 
-    # analyze_loinc_table()
+        if subject.startswith( 'tab'): # data, ts
+            analyze_loinc_table()
 
+        if subject.startswith('hard'):  # hard cases 
+            analyze_hard_cases(verbose=verbose) 
+
+        if subject.startswith( ('feat', 'var') ):
+            analyze_feature_values()
 
     return
 

@@ -1,7 +1,4 @@
-
 # coding: utf-8
-
-# In[1]:
 
 import csv
 import re, os
@@ -12,7 +9,6 @@ import config
 
 
 loincFilePath = config.loinc_file_path
-
 
 def clean_terms(dataElement):
     """
@@ -29,7 +25,7 @@ def clean_terms(dataElement):
     data = (dataElement.replace("'", "").replace(",", " ").replace(".", " ")         
         .replace(":", " ").replace('\t', " ").replace("^", " ").replace("+", " ")         
         .replace("*", " ").replace("~", " ").replace("(", " ").replace(")", " ")         
-        .replace("!",  " ").replace("[", " ").replace("]", " ")         
+        .replace("!",  " ").replace("[", " ").replace("]", " ").replace("{", " ").replace("}", " ")       
         .replace("_", " ").replace("|", " ").replace('"', " ")         
         .replace("-", " ").replace("/", " ").replace("\\", " ")         
         .replace("#", " ").replace("?", " ").replace("%", " ")         
@@ -51,25 +47,36 @@ def add_match(data, shortName, matchName):
         data[shortName][matchName] += 1
 
 def expand_words(data, shortWords, longWords):
+    """
+
+    Memo
+    ----
+    1. most medical acronyms are <= 3 words, and that's why "i+2 < j: break"
+    """
     stringDelta = len(longWords) - len(shortWords)
     for i in range(len(shortWords)):
         match1 = ""
         match2 = ""
         match3 = ""
+        # ... will attempt to find at the longest 3-token match in LN
+
         j = 0
         for j in range(len(longWords)):
             if stringDelta >= 0:
-                if ((i + 0) > j): continue
-                if ((i + 2) < j): break
+                if ((i + 0) > j): continue   # only look at tokens that comes after SN<i> 
+                if ((i + 2) < j): break      # have looked at 2+1 tokens, stop
+
+                # matching tokens at i, i+1, i+2
                 if ((i + 0) == j):
-                    match1 = longWords[j]
+                    match1 = longWords[j]    # unigram match
                 if ((i + 1) == j):
-                    match2 = match1 + " " + longWords[j]; 
+                    match2 = match1 + " " + longWords[j];     # bigram batch
                 if ((i + 2) == j):
-                    match3 = match2 + " " + longWords[j]; 
+                    match3 = match2 + " " + longWords[j];     # trigram batch
             else:
                 if ((i - 2) > j): continue;
                 if ((i + 0) < j): break;
+
                 if ((i - 2) == j):
                     match1 = longWords[j]; 
                 if ((i - 1) == j):
@@ -101,14 +108,16 @@ def parse_loinc(canonicalized=True):
             longNameInd = fields.index('LONG_COMMON_NAME')
             classTypeInd = fields.index('CLASSTYPE')
             continue
-            
+
         loincNum = fields[loincNumInd]
         component = fields[componentInd].upper()
         system = fields[systemInd].upper();
         shortName = fields[shortNameInd].upper();
         longName = fields[longNameInd].upper();
         classType = fields[classTypeInd];
+
         if classType != "1" and classType != "2": continue  #only keep the lab and clinical class types
+
         loincs.append(loincNum)
         shortWords = clean_terms(shortName)
         
@@ -139,7 +148,7 @@ def parse_loinc(canonicalized=True):
         parsed_loinc_fields_df.to_csv(  os.path.join(config.out_dir, "LOINC_Parsed_Component_System_Longword.csv"), sep="|", index=False)
     return [short_to_long_df, parsed_loinc_fields_df]
 
-def t_parse(**kargs):
+def demo_parse(**kargs):
     from tabulate import tabulate
 
     df_short_to_long, df_parsed_loinc_fields = parse_loinc() 
@@ -151,7 +160,7 @@ def t_parse(**kargs):
 
 def test(**kargs): 
 
-    t_parse()
+    demo_parse()
 
     return
 

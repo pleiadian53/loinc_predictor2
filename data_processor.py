@@ -5,12 +5,328 @@ import sklearn.datasets as datasets
 from pandas import DataFrame
 import pandas as pd
 from tabulate import tabulate
+import numpy as np
 
 dataDir = os.path.join(os.getcwd(), 'data')  # default unless specified otherwise
 
 class Data(object): 
-    label = 'label'
+    label = 'test_result_loinc_code'
     features = []
+    prefix = os.path.join(os.getcwd(), 'data')
+
+def save_generic(df, cohort='', dtype='ts', output_file='', sep=',', **kargs):
+    output_dir = kargs.get('output_dir', os.path.join(os.getcwd(), 'data')) 
+    verbose=kargs.get('verbose', 1)
+    if not output_file: 
+        if cohort: 
+            output_file = f"{dtype}-{cohort}.csv" 
+        else: 
+            output_file = "test.csv"
+    output_path = os.path.join(output_dir, output_file)
+
+    df.to_csv(output_path, sep=sep, index=False, header=True)
+    if verbose: print("(save_generic) Saved dataframe (dim={}) to:\n{}\n".format(df.shape, output_path))
+    return  
+def load_generic(cohort='', dtype='ts', input_file='', sep=',', **kargs):
+    input_dir = kargs.get('input_dir', os.path.join(os.getcwd(), 'data'))
+
+    warn_bad_lines = kargs.get('warn_bad_lines', True)
+    verbose=kargs.get('verbose', 1)
+    columns = kargs.get('columns', [])
+
+    if not input_file: 
+        if cohort: 
+            input_file = f"{dtype}-{cohort}.csv" 
+        else: 
+            input_file = "test.csv"
+    input_path = os.path.join(input_dir, input_file)
+
+    if os.path.exists(input_path) and os.path.getsize(input_path) > 0: 
+        df = pd.read_csv(input_path, sep=sep, header=0, index_col=None, error_bad_lines=False, warn_bad_lines=warn_bad_lines)
+        if verbose: print("(load_generic) Loaded dataframe (dim={}) from:\n{}\n".format(df.shape, input_path))
+    else: 
+        df = None
+        if verbose: print("(load_generic) No data found at:\n{}\n".format(input_path))
+
+    if len(columns) > 0: 
+        return df[columns]
+    return df  
+
+def save_data(df, cohort='', output_file='', sep=',', **kargs): 
+    output_dir = kargs.get('output_dir', os.path.join(os.getcwd(), 'data'))
+    verbose=kargs.get('verbose', 1)
+    if not output_file: 
+        if cohort: 
+            output_file = f"ts-{cohort}.csv" 
+        else: 
+            output_file = "ts-generic.csv"
+    output_path = os.path.join(output_dir, output_file)
+
+    df.to_csv(output_path, sep=sep, index=False, header=True)
+    if verbose: print("(save_data) Saved dataframe (dim={}) to:\n{}\n".format(df.shape, output_path))
+    return
+
+def load_data(cohort='', input_file='', sep=',', **kargs):
+    input_dir = kargs.get('input_dir', os.path.join(os.getcwd(), 'data'))
+    
+    warn_bad_lines = kargs.get('warn_bad_lines', True)
+    verbose=kargs.get('verbose', 1)
+    columns = kargs.get('columns', [])
+    canonicalized = kargs.get('canonicalized', False)
+
+    if not input_file: 
+        if cohort: 
+            input_file = f"ts-{cohort}.csv" 
+        else: 
+            input_file = "ts-generic.csv"
+    input_path = os.path.join(input_dir, input_file)
+
+    df = pd.read_csv(input_path, sep=sep, header=0, index_col=None, error_bad_lines=False, warn_bad_lines=warn_bad_lines)
+    if verbose: print("(load_data) Loaded dataframe (dim={}) from:\n{}\n".format(df.shape, input_path))
+    
+    if canonicalized: 
+        import loinc as lc
+        col_target = kargs.get('col_target', 'test_result_loinc_code')
+        token_default = token_missing = 'unknown'
+        df = df.drop_duplicates(keep='last')  # drop duplicates 
+        df = lc.canonicalize(df, col_target=col_target, token_missing=token_default) # noisy_values/[]
+
+    if len(columns) > 0: 
+        return df[columns]
+
+    return df
+
+def generate_data(case='classification', sparse=False):
+    """
+    Example for generating training instances.
+    """
+    from sklearn import datasets
+    from sklearn.utils import shuffle
+    from scipy.sparse.csr import csr_matrix
+
+    """Generate regression/classification data."""
+    bunch = None
+    if case == 'regression':
+        bunch = datasets.load_boston()
+    elif case == 'classification':
+        bunch = datasets.fetch_20newsgroups_vectorized(subset='all')
+    X, y = shuffle(bunch.data, bunch.target)
+    offset = int(X.shape[0] * 0.8)
+    X_train, y_train = X[:offset], y[:offset]
+    X_test, y_test = X[offset:], y[offset:]
+    if sparse:
+        X_train = csr_matrix(X_train)
+        X_test = csr_matrix(X_test)
+    else:
+        X_train = np.array(X_train)
+        X_test = np.array(X_test)
+    y_test = np.array(y_test)
+    y_train = np.array(y_train)
+    data = {'X_train': X_train, 'X_test': X_test, 'y_train': y_train,
+            'y_test': y_test}
+    return data
+
+def balance_data(df, df2=None, n_samples=-1, col='test_result_loinc_code', labels=[], verbose=1): 
+    """
+    Make class-balanced training data by balancing sample sizes.
+
+    Input
+    -----
+    df: Input dataframe whose columns contain both features/variables and class labels
+
+    """
+    if n_samples < 0: 
+        ds = stratify(df, col=col)
+        # use the median sample size as the standard sample size
+        n_samples = int(np.median([e[1] for e in ds]))
+    print("(balance_data) n_samples={}".format(n_samples))
+
+    # target labels from the given 'col'
+    if len(labels) == 0: 
+        labels = set(df[col])
+
+        if df2 is not None or not df2.empty:
+            labels_external = set(df2[col])
+            print("(balance_data) Found n={} unique codes from source | nc={} unique codes from external".format(
+                len(labels), len(labels_external)))
+        
+    N0 = df.shape[0]
+
+    if verbose: 
+        labels = np.random.choice(df[col].unique(), 30)
+        print("(balance_data) example labels:\n{}\n".format(list(labels)))
+        if df2 is not None or not df2.empty: 
+            labels2 = np.random.choice(df2[col].unique(), 30)
+            print("(balance_data) example labels from supplement data:\n{}\n".format(list(labels2)))
+    
+    dfx = []
+    if df2 is None or df2.empty: # Case 1: Balance within the original training data (df) without additional data (df2)
+    
+        for r, df in df.groupby([col, ]): 
+            n = df.shape[0]
+            if n > n_samples: 
+                dfx.append( df.sample(n=n_samples) )
+            else: 
+                dfx.append( df )
+
+        df = pd.concat(dfx, ignore_index=True)
+    else: ## case 2: Balance with additional training data (df2)
+        assert df.shape[1] == df2.shape[1], "Inconsistent feature dimension: nf={} <> nf2={}".format(df.shape[1], df2.shape[1])
+
+        delta = {}
+        dfx = []
+        n_hit = n_miss = 0. # n_extra
+        hit, missed = [], []
+        for r, dfi in df.groupby([col, ]): 
+            if not r in labels: continue
+
+            n = dfi.shape[0]
+
+            dfc = df2.loc[df2[col]==r]
+            nc = dfc.shape[0]
+            if nc == 0: 
+                n_miss += 1
+                # print(f"(balance_training_data) Could not find code={r} in external data ... !!!")
+                missed.append(r)
+            else: 
+                hit.append(r)
+            
+            if n >= n_samples: 
+                pass # no need to add data 
+                # delta[r] = 0
+            else: 
+                delta = n_samples-n
+
+                if nc > 0: 
+                    # delta[r] = n_samples-n
+                    dfx.append( dfc.sample(n=min(delta, nc)) )
+                    n_hit += 1 
+
+                    if verbose and n_hit < 20: 
+                        print("(balance_data) Added n={} cases to code={}".format(dfx[-1].shape[0], r))
+                else: 
+                    print(f"... Could not find cases in external for code={r} ... #")
+        
+        print("(balance_data) Added n={} cases in total | n_miss:{} ... #".format(n_hit, n_miss)) # [debug] somehow the values got cast to float
+        print(f"... missed:\n{missed}\n")
+        print(f"... hit:\n{hit}\n")
+
+        if len(dfx) > 0: 
+            df_extra = pd.concat(dfx, ignore_index=True)
+            df = pd.concat([df, df_extra], ignore_index=True)
+
+        if verbose: 
+            print("(balance_data) N: {} => {}".format(N0, df.shape[0])) 
+
+    return df
+
+def balance_data_incr(df, df_extern, n_samples=-1, col='test_result_loinc_code', labels=[], verbose=1, **kargs):
+    """
+    Similar to balance_data() but expect df_extern to be huge (to a degree that may not fit into main memory)
+    """
+    import loinc as ul
+
+    n_baseline = n_samples
+    if n_baseline < 0: 
+        ds = stratify(df, col=col)
+        # use the median sample size as the standard sample size
+        n_baseline = int(np.median([e[1] for e in ds]))
+    print("(balance_data_incr) n_baseline={}".format(n_baseline))
+
+    # labels: all the possible class labels (e.g. LOINC codes) read from 'col' (e.g. test_result_loinc_code)
+    if len(labels) == 0: 
+        labels = set(df[col])
+
+        # verify the external data
+        if df_extern is not None or not df_extern.empty:
+            labels_external = set(df_extern[col])
+            print("(balance_data_incr) Found n={} unique codes from source | nc={} unique codes from external".format(
+                len(labels), len(labels_external)))
+
+            delta_l = list(set(labels_external)-set(labels))
+            print("... found {}=?=0 extra codes from the df_extern:\n{}\n".format(len(delta_l), delta_l[:20]))
+            labels_common = list(set(labels_external).intersection(labels))
+            print("... found {} common codes from the df_extern:\n{}\n".format(len(labels_common), labels_common[:20]))
+
+    N0 = df.shape[0]
+    assert df.shape[1] == df_extern.shape[1], "Inconsistent feature dimension: nf={} <> nf2={}".format(df.shape[1], df_extern.shape[1])
+
+    ###############################################
+    delta = {}
+    dfx = []
+    n_hit = n_miss = 0. # n_extra
+    hit, missed = set([]), set([])
+    for k, dfi in df.groupby([col, ]): 
+        if not k in labels: continue # don't add data if not in the target label set
+        if k in ul.LoincTSet.non_codes: continue  # don't add data if the classe is either 'unknown' or 'others'
+
+        ni = dfi.shape[0]
+        dfj = df_extern.loc[df_extern[col]==k]
+        nj = dfj.shape[0]
+
+        if nj == 0: # cannot find matching rows in df_extern
+            # print(f"(balance_training_data) Could not find code={r} in external data ... !!!")
+            missed.add(k)
+            # if verbose and len(missed)%50==0: 
+            #     print("(balance_data_incr) Could not find cases in external for code={} (n={})... #".format(k, len(missed)))
+        else: 
+            hit.add(k)
+
+            if n_baseline > ni: 
+                delta = n_baseline-ni
+                dfx.append( dfj.sample(n=min(delta, nj)) ) 
+
+                if verbose and len(hit) % 25 == 0: 
+                    print("(balance_data_incr) Added n={} cases to code={}".format(dfx[-1].shape[0], k))
+    
+    if verbose: 
+        print("(balance_data_incr) Added n={} cases in total | n_miss:{} ... #".format(len(hit), len(missed))) # [debug] somehow the values got cast to float
+        print("... missed (n={}):\n{}\n".format(len(missed), list(missed)[:20]))
+        print("... hit (n={}):\n{}\n".format(len(hit), list(hit)[:20]))
+
+    df_incr = DataFrame(columns=df.columns)
+    if len(dfx) > 0: 
+        df_incr = pd.concat(dfx, ignore_index=True)
+        # df = pd.concat([df, df_extra], ignore_index=True)
+
+    if verbose: 
+        print("(balance_data) N_extra: {}".format(df_incr.shape[0])) 
+
+    return df_incr, list(hit), list(missed)
+
+def group_by(df, cols=['test_result_code', 'test_result_name',], verbose=1, n_samples=-1): 
+    """
+    Group training data by patient attributes. 
+
+    Note that there is a groupby counterpart for the LOINC table (see loinc.py)
+
+    """
+    cols_key = ['test_result_loinc_code', ]
+    cols_test = ['test_order_code', 'test_order_name', 'test_result_code', 'test_result_name', ]
+    cols_text = ['medivo_test_result_type', 'test_result_comments', ] 
+    target_properties = cols_key + cols_test + cols_text
+
+    adict = {}
+    for index, dfg in df.groupby(cols): 
+        dfe = dfg[target_properties]
+        adict[index] = dfe
+
+    if verbose:
+        n_groups = len(adict)
+        if n_samples < 0: n_samples = n_groups
+
+        test_cases = set(np.random.choice(range(n_groups), min(n_groups, n_samples)))
+        for i, (index, dfg) in enumerate(adict.items()):
+            nrow = dfg.shape[0] 
+            if i in test_cases and nrow > 1: 
+                print("... [{}] => \n{}\n".format(index, dfg.sample(n=min(nrow, 5)).to_string(index=False) ))
+    
+    return adict
+
+def map_group_to_label(df, cols=['test_result_code', 'test_result_name',], verbose=1, n_samples=-1):
+    return
+
+########################################################################################################
 
 def get_diabetes_data(): 
     # https://www.kaggle.com/uciml/pima-indians-diabetes-database#diabetes.csv
@@ -30,7 +346,7 @@ def get_diabetes_data():
     
     return (X, y, feature_cols) 
 
-def load_data(input_path=None, input_file=None, col_target='label', exclude_vars=[],  sep=',', verbose=True): 
+def load_data0(input_path=None, input_file=None, col_target='label', exclude_vars=[],  sep=',', verbose=True): 
     """
 
     Memo
@@ -74,61 +390,6 @@ def load_data(input_path=None, input_file=None, col_target='label', exclude_vars
         print("... dim(X): {} variables: {}".format(X.shape, features))
     
     return (X, y, features)
-
-def encode_vars(df):
-    """
-    Encode categorical and ordinal features. 
-
-    References
-    ----------
-    1. dealing with categorical data
-
-       a. https://towardsdatascience.com/understanding-feature-engineering-part-2-categorical-data-f54324193e63
-
-       b. one-hot encoding
-
-          https://www.ritchieng.com/machinelearning-one-hot-encoding/ 
-
-    2. One-hot encoding in sklearn 
-
-        a. The input to this transformer should be a matrix of integers, denoting the values taken on by categorical (discrete) features.
-        b. The output will be a sparse matrix where each column corresponds to one possible value of one feature.
-        c. It is assumed that input features take on values in the range [0, n_values).
-        d. This encoding is needed for feeding categorical data to many scikit-learn estimators, notably linear models and SVMs with the standard kernels.
-    """
-    from sklearn.preprocessing import LabelEncoder, OneHotEncoder
-    # le = LabelEncoder()
-
-    # # first we need to know which columns are ordinal, categorical 
-    # col = ''
-    # num_labels = le.fit_transform(df[col])
-    # mappings = {index: label for index, label in enumerate(le.classes_)} 
-
-    # limit to categorical data using df.select_dtypes()
-    df = df.select_dtypes(include=[object])
-    print(df.head(3))
-    
-    cols = df.columns  # categorical data candidates  <<< edit here
-
-    le = preprocessing.LabelEncoder()
-
-    # 2/3. FIT AND TRANSFORM
-    # use df.apply() to apply le.fit_transform to all columns
-    df2 = df.apply(df.fit_transform)
-    print(df2.head())
-    # ... now all the categorical variables have numerical values
-
-    # INSTANTIATE
-    enc = preprocessing.OneHotEncoder()
-
-    # FIT
-    enc.fit(df2)
-
-    # 3. Transform
-    onehotlabels = enc.transform(df2).toarray()
-    
-
-    return
 
 def load_merge(vars_matrix='exposures-4yrs.csv', label_matrix='nasal_biomarker_asthma1019.csv', 
         output_matrix='exposures-4yrs-asthma.csv',

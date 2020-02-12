@@ -49,43 +49,65 @@ def cosine_similarity(vector1, vector2):
         return 0
     return dot_product/magnitude
 
-def build_tfidf_model(source_values=[], df=None, col='medivo_test_result_type'): 
+def build_tfidf_model(source_values=[], df=None, cols=[], **kargs): 
     from gensim.corpora import Dictionary
     from gensim.models import TfidfModel
     from loinc import LoincTable
+    import transfomer as tr
+
+    tStandardize = kargs.get('standardize', True)
+    value_default = kargs.get('value_default', "")
+    ngram_range = kargs.get('ngram_range', (1, 3))
+    tVerify = kargs.get('verify', True)
 
     if len(source_values) == 0:
         assert df is not None 
-        source_values = df[col]
+        if not cols: cols = ['test_result_loinc_code', 'medivo_test_result_type']
+        source_values = tr.conjoin(df, cols=cols, transformed_vars_only=True, sep=" ", remove_dup=True)
+        # ... remove_dup: if True, remove duplicate tokens in the sentence
+        if not tStandardize: 
+            print("(build_tfidf_model) Warning: Building corpus from dataframe, you may need to set standardize to True!")
 
-    value_default = ''
-    # assert np.all([isinstance(source_text, str) for source_text in source_values])  
-    source_values_processed = [] 
-    for source_text in source_values:
-        if pd.isna(source_text):
-            source_values_processed.append(value_default)
-        else: 
-            # treat numerical values as tokens if any
-            assert isinstance(source_text, (str, float, int))
-            source_values_processed.append(str(source_text))
-    source_values = source_values_processed
+    if tStandardize: 
+        source_values = preproces_source_values(source_value=source_values, value_default=value_default)
 
-    source_token_lists = [source_text.split() for source_text in source_values]
+    # source_token_lists = [source_text.split() for source_text in source_values]
     
-    # [test]
-    lengths = [len(source_token_list) for source_token_list in source_token_lists]
-    print("(build_tfidf_model) E[len(texts)]: {}".format( sum(lengths)/(len(lengths)+0.0) ))
+    # # [test]
+    # lengths = [len(source_token_list) for source_token_list in source_token_lists]
+    # print("(build_tfidf_model) E[len(texts)]: {}".format( sum(lengths)/(len(lengths)+0.0) ))
 
-    # -- use gensim
-    dct = Dictionary(source_token_lists)
-    corpus = [dct.doc2bow(tokens) for tokens in source_token_lists]
-    model = TfidfModel(corpus)  # fit model
+    # # -- use gensim
+    # dct = Dictionary(source_token_lists)
+    # corpus = [dct.doc2bow(tokens) for tokens in source_token_lists]
+    # model = TfidfModel(corpus)  # fit model
+    # tfidf_matrix =  tfdif.fit_transform([content for file, content in corpus])
 
     # -- use sklearn
-    tfidf = TfidfVectorizer(analyzer='word', ngram_range=(1,3), min_df=1, stop_words=LoincTable.stop_words) # stop_words/'english'
-    tfidf_matrix =  tfdif.fit_transform([content for file, content in corpus])
+    tfidf = TfidfVectorizer(analyzer='word', ngram_range=ngram_range, min_df=1, stop_words=LoincTable.stop_words) # stop_words/'english'
+    tfidf = tfidf.fit(source_values)
+    
+    # -- test
+    if tVerify: 
+        fset = tfidf.get_feature_names()
+        Xtr = tfidf.transform(source_values)
 
-    return (model, dct, corpus)
+        analyze = tfidf.build_analyzer()
+        np.random.choice(source_values, 1)[0]
+        print("(model) ngram_range: {} => {}".format(ngram_range, analyze(np.random.choice(source_values, 1)[0])))
+
+        # --- interpretation 
+        print("(model) Interpreting the TF-IDF model")
+        for i, dvec in enumerate(Xtr):
+            # top_tfidf_features(dvec, features=tfidf.get_feature_names(), top_n=10)
+            df = top_features_in_doc(Xtr, features=fset, row_id=i, top_n=10)
+            print("... doc #{}:\n{}\n".format(i, df.to_string(index=True)))
+
+        print("... top n features overall across all docs")
+        df = top_mean_features(Xtr, fset, grp_ids=None, min_tfidf=0.1, top_n=10)
+        print("... doc(avg):\n{}\n".format(df.to_string(index=True)))
+
+    return tfidf
 
 def find_topn_most_similar(): 
     """
@@ -184,7 +206,50 @@ def plot_tfidf_classfeats_h(dfs):
 
 ##########################################################
 
-def demo_predict(**kargs):
+def demo_create_tfidf_vars(save=True):
+    from transformer import preproces_source_values
+    from analyzer import label_by_performance, col_values_by_codes, load_src_data
+
+    cohort = "hepatitis-c"
+    col_target = 'test_result_loinc_code'
+    categories = ['easy', 'hard', 'low']  # low: low sample size
+    ccmap = label_by_performance(cohort='hepatitis-c', categories=categories)
+
+    codes_lsz = ccmap['low']
+    print("(demo) n_codes(low sample size): {}".format(len(codes_lsz)))
+    codes_hard = ccmap['hard']
+    print("...    n_codes(hard): {}".format(len(codes_hard)))
+    target_codes = list(set(np.hstack([codes_hard, codes_lsz])))
+    dfp = load_src_data(cohort=cohort, warn_bad_lines=False, canonicalized=True, processed=True)
+    # adict = col_values_by_codes(target_codes, df=dfp, cols=['test_result_name', 'test_order_name'], mode='raw')
+    dfp = dfp.loc[dfp[col_target].isin(target_codes)]
+    ############################################################
+    # ... now we have the training data with loinc codes of either low classification performance or low sample sizes 
+
+    # loincmap = load_loincmap(cohort=cohort)
+    # if loincmap is None: 
+    #     loincmap, short_to_long, parsed_loinc_fields = combine_loinc_mapping()
+        # ... byproduct: loincmap-<cohort>.csv
+
+    value_default = ""
+    target_test_cols = ['test_result_loinc_code', 'medivo_test_result_type', ]
+    for col in target_test_cols: 
+
+        # --- pass df
+        
+        # dft = dfp[ [col] ]   # just pass two columns: test_result_loinc_code, test*
+        # dft = dft.drop_duplicates().reset_index(drop=True)
+
+        # --- pass only source valus
+        dfp = preproces_source_values(dfp, col=col, value_default=value_default)
+
+        
+    uniq_src_vals = dfp[col].unique()
+    print("... n(unique values): {}".format(len(uniq_src_vals)))
+
+    return
+
+def demo_tfidf_transform(**kargs):
     """
 
     Memo
@@ -321,13 +386,29 @@ def demo_tfidf(**kargs):
 
     return
 
+def demo_text_model(): 
+    from feature_gen_sdist import distance_jaro_winkler
+   
+    # string matching-based distance metrics
+    cases = [("", ""), ("CBC W DIFF PLATELET COUNT", ""), ("CBC W DIFF PLATELET COUNT", "CBC PLATELET COUNT"), 
+             ("CBC W DIFF PLATELET COUNT", "CBC W DIFF PLATELET"), ("CBC W DIFF", "CBC W DIFF PLATELET COUNT")
+             ]
+    for i, (x, y) in enumerate(cases): 
+        d = distance_jaro_winkler(x, y, verbose=1)
+        print("> JW distance |\nx={}\ny={}\nd={}".format(x, y, d))
+
+    return
+
 def test(): 
+
+    # --- Text features in general 
+    demo_text_model()
 
     # --- TF-IDF encoding
     # demo_tfidf()
 
     # --- prediction using the vectors produced by TF-IDF encoding 
-    demo_predict()
+    # demo_tfidf_transform()
 
     return
 

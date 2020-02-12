@@ -81,6 +81,75 @@ def categorify(df, cat_cols, cont_cols=[],  verbose=1):
     #     # print('> dim(X): {}, dim(y): {}'.format(X.shape, y.shape))
     return df
 
+def preproces_source_values(df=None, col='', source_values=[], value_default=""): 
+    """
+    Assuming that the input source values are strings, this function 
+    converts all NaNs to empty strings, numeric values to their string counterparts, 
+    and remove redundant spaces in the front and back of the source values.  
+
+    """
+
+    import pandas as pd
+    
+    hasValidDf = df is not None and col in df.columns
+    if isinstance(source_values, str): source_values = [source_values, ]
+    if len(source_values) == 0: # unique_tests
+        assert hasValidDf, "Neither the source values nor training data were given!"
+        source_values = df[col].values 
+        
+    source_values_processed = []
+    n_null = n_numeric = 0
+    for source_value in df[col].values: 
+        if pd.isna(source_value): 
+            source_values_processed.append(value_default)
+            n_null += 1
+        elif isinstance(source_value, (int, float, )): 
+            n_numeric += 1
+            source_values_processed.append(str(source_value))
+        else: 
+            source_values_processed.append( source_value.strip() )
+
+    if hasValidDf: 
+        df[col] = source_values_processed
+        return df 
+    return source_values_processed
+
+def remove_duplicates(s, sep=" "):
+    tokens = s.split(sep)
+    return sep.join(sorted(set(tokens), key=tokens.index))
+
+def join_feature_names(cols, sep='_'): 
+    return remove_duplicates(sep.join(cols), sep=sep)
+
+def conjoin(df, cols=[], transformed_vars_only=True, sep=" ", remove_dup=True, col_output=''):
+    # combine text data from across multiple columns
+    
+    if len(cols) > 1: 
+        new_values = df[cols].astype(str).agg(sep.join, axis=1).values
+    elif len(cols) == 1: 
+        new_values = df[cols].values
+    else: 
+        msg = "(conjoin) Warning: No target columns specified! cols={}\n".format(cols)
+        raise ValueError(msg)
+    # ... A Series
+
+    if remove_dup: 
+        new_values_processed = []
+        for new_value in new_values: 
+            tokens = new_value.split(sep)
+            new_values_processed.append(sep.join(sorted(set(tokens), key=tokens.index)))
+        new_values = new_values_processed
+
+    if transformed_vars_only: 
+        if len(col_output) > 0: 
+            df[col_output] = new_values
+            return df
+        return new_values
+
+    if len(col_output) == 0: col_output = '_'.join(cols)
+    df[col_output] = new_values
+    return df    
+
 def predicate_scaling(X, cols=[], mode='minmax'):
     # from sklearn.preprocessing import MinMaxScaler, StandardScaler
     
@@ -259,6 +328,9 @@ def take(n, iterable):
     from itertools import islice
     "Return first n items of the iterable as a list"
     return list(islice(iterable, n))
+
+# --- Complex Transfomration ---
+###################################################
 
 def t_transformation(**kargs):
     from analyzer import load_data
