@@ -1,6 +1,7 @@
 # coding: utf-8
 import pandas as pd
 import numpy as np
+import os, re
 from collections import defaultdict
 import config
 
@@ -67,7 +68,7 @@ def quant_nans(group):
     return group
 
 
-def get_loinc_synonyms():
+def get_loinc_synonyms(output_file='', output_path='', verbose=1):
     raw_loinc_mults = get_loinc_groups()
 
     raw_loinc_mults = raw_loinc_mults.groupby(['COMPONENT', 'PROPERTY', 'TIME_ASPCT', 'SYSTEM', 'SCALE_TYP'])         .apply(quant_nans)
@@ -76,9 +77,43 @@ def get_loinc_synonyms():
     
     final_loinc_keys = raw_loinc_mults[['LOINC_NUM', 'LOINC_KEY']].reset_index(drop = True)
 
-    final_loinc_keys.to_csv(config.out_dir + 'loinc_synonymns.csv', index=False)
+    if not output_file: output_file = 'loinc_synonymns.csv'
+    if not output_path: output_path = os.path.join(config.out_dir, output_file)
+    if verbose: print("(get_loinc_synonyms) Saving LOINC synonyms to:\n{}\n".format(output_path))
+    final_loinc_keys.to_csv(output_path, index=False)
     
     return final_loinc_keys
+
+def load_synosyms(input_file='loinc_synonymns.csv', **kargs):
+    from data_processor import load_generic 
+    from transformer import dehyphenate
+
+    dehyphen = kargs.get('dehyphenate', True)
+    input_dir = kargs.get('input_dir', config.out_dir)
+    input_path = os.path.join(config.out_dir, input_file)
+    df = load_generic(input_file=input_file, input_dir=input_dir, sep=',')  
+
+    if dehyphen: 
+        cols = ['LOINC_NUM', 'LOINC_KEY']
+        df = dehyphenate(df, col=cols)  # inplace
+    return df
+
+def demo_loinc_synonyms(): 
+
+    df = get_loinc_synonyms()
+    print("(synonyms) Example LOINC synonyms:\n{}\n".format(df.head(50).to_string(index=False)))
+
+    return
+
+def test(): 
+
+    # --- 
+    demo_loinc_synonyms()
+
+    return
+
+if __name__ == "__main__": 
+    test()
 
 
 

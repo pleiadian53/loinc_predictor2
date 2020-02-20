@@ -7,15 +7,15 @@ import pandas as pd
 import numpy as np
 from collections import defaultdict, Counter
 
-from loinc import LoincTSet
+from loinc import LoincTSet, LoincTable
 
 REJECTION_THRESHOLD = config.rejection_threshold
 
 def standardize(x): 
-    if pd.isna(x) or len(str(x)) == 0: 
-        return ''
+    if pd.isna(x): 
+        return ""
     if not isinstance(x, str): 
-        return x
+        return str(x)
     return x.upper().strip()
 
 def resolve_test_value(row, x, value_col='test_result_value'): 
@@ -72,7 +72,7 @@ def import_source_data(input_path='', verbose=1, warn_bad_lines=False, sep=',', 
     skipped_sites = set([])
     skipped_index = []
 
-    cached = defaultdict(list)
+    cached = defaultdict(list) # store cleaned text row by row
 
     for r, row in df.iterrows(): 
         if r > 0 and (r % 50000 == 0): print("##### Processing line #{} ...".format(r))
@@ -234,22 +234,23 @@ def preprocess_terms(df, dataType='testNames'):
     pass 
 
 def clean_term(term, site='', siteWordCount=None, dataType=''): # dtype
+    """
+
+    Memo
+    ---- 
+    1. siteWordCount is expected to be given externally
+
+        siteWordCount = defaultdict(Counter)
+        siteTotalWordCount = defaultdict(int)
+
+    """
     if pd.isna(term): 
         print("(clean_term) Input term is NaN: {}".format(term))
         return ''
     if not isinstance(term, str): 
         return str(term)
-    # if not isinstance(term, str): 
-    #     print("(clean_term) Input term is not a string: {} | dtype: {}".format(term, type(term)))
-    #     return str(term)
 
-    #if config.print_status == 'Y':
-    #    print('Cleaning source data per row | dataType={}'.format(dataType))
-    insigWords = ["IN", "FROM", "ON", "OR", "OF", "BY", "AND", "&", "TO", "BY", "", " "]
-    # siteWordCount = defaultdict(Counter)
-    # siteTotalWordCount = defaultdict(int)
-    # cleanedList = defaultdict(lambda: defaultdict(list))
-    # discardedTerms = defaultdict(list)
+    insigWords = LoincTable.stop_words # ["IN", "FROM", "ON", "OR", "OF", "BY", "AND", "&", "TO", "BY", "", " "]
     
     modTerm = (term.replace("'", "").replace(",", " ").replace(".", " ") \
         .replace(":", " ").replace('\t', " ").replace("^", " ").replace("+", " ")\
@@ -279,7 +280,7 @@ def clean_term(term, site='', siteWordCount=None, dataType=''): # dtype
             newWord = splits[k].strip()
             nameSplit.append(newWord)
 
-            if len(site) > 0 and siteWordCount is not None: 
+            if len(site) > 0 and isinstance(siteWordCount, dict): 
                 siteWordCount[site][newWord] += 1
             k = k + 1
         j = j + 1

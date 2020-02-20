@@ -8,6 +8,7 @@ import common
 from sklearn.base import BaseEstimator, ClassifierMixin
 
 # local modules 
+import loinc
 from loinc import LoincMTRT as lmt
 
 
@@ -76,7 +77,7 @@ class MTRTClassifier(BaseEstimator, ClassifierMixin):
         self.source_table = source_table
         if not source_table: self.source_table = lmt.table
 
-        self.table = lmt.load_loinc_to_mtrt(dehyphenate=True, dequote=True) # input_file/LoincMTRT.table
+        self.table = lmt.load_table(dehyphenate=True, dequote=True) # input_file/LoincMTRT.table
 
     def fit(self, X, y=None):
         """
@@ -110,6 +111,44 @@ class MTRTClassifier(BaseEstimator, ClassifierMixin):
         # counts number of values bigger than mean
         return(sum(self.predict(X))) 
 
+class FeatureSet(loinc.FeatureSet): 
+
+    matching_cols = [
+        "meta_sender_name",
+      
+        "receiving_organization_id",
+        "test_order_code",
+        "test_order_name",
+        "test_result_code",
+        "test_result_name",
+        # "test_result_loinc_code",
+        "test_result_units_of_measure", 
+
+        "panel_order_name", 
+
+    ]
+    # ... assuming that all the matching cols are categorical variables
+
+    corpus_src_cols = [
+        'test_order_name', 
+        'test_result_name', 
+        'test_specimen_type', 
+        'panel_order_name', 
+        'test_result_units_of_measure',
+
+        # additionally, we'll usually incorporate LOINC's long common name and MTRT 
+
+    ]
+### class FeatureSet
+
+def evaluate_vars_given_candidate(row, code): 
+    """
+    Given a row from the training data and a candidate code, 
+    compute its feature values.
+
+    """
+    # 
+    
 
 def predict_by_mtrt(mtrt_str='', target_code=None, df=None, **kargs):
     """
@@ -135,7 +174,7 @@ def predict_by_mtrt(mtrt_str='', target_code=None, df=None, **kargs):
     from loinc import LoincMTRT
 
     col_key = kargs.get('col_key', lmt.col_key) # 'Test Result LOINC Code'
-    if df is None: df = lmt.load_loinc_to_mtrt(dehyphenate=True, dequote=True) # input_file/LoincMTRT.table
+    if df is None: df = LoincMTRT.load_table(dehyphenate=True, dequote=True) # input_file/LoincMTRT.table
     
     # verify 
     for code in df['Test Result LOINC Code'].values: 

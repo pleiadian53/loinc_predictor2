@@ -2062,7 +2062,7 @@ def demo_r2_score(X_train, y_train, X_test, y_test):
 
     return
 
-def visualize_coeffs(ts, file_name='', features=[], label='label', ts_test=None): 
+def visualize_coeffs(X, y, features=[], **kargs): 
     """
 
     Memo
@@ -2078,26 +2078,20 @@ def visualize_coeffs(ts, file_name='', features=[], label='label', ts_test=None)
        https://stackoverflow.com/questions/332289/how-do-you-change-the-size-of-figures-drawn-with-matplotlib
 
     """
-    def getXY():
-        X = ts.drop(label, axis=1).values
-        y = ts[label].values 
-        return (X, y)
-
     from sklearn.linear_model import SGDClassifier
 
     if len(features) == 0: 
-        # [tip] ts.loc[:, df.columns != 'label']
-        features = ts.drop(label, axis=1).columns.values
+        features = [f'x{i}' for i in range(X.shape[1])]
 
-    X_train = ts[features].values
-    y_train = ts[label].values
+    output_file = kargs.get('output_file', 'coeffs') # output file minus the extension 
+
     # print('... n_features: %d | dim(X):%s, dim(y):%s' % (len(features), str(X_train.shape), str(y_train.shape)))
     
     # [todo] customize classifier
     params = {'penalty': 'elasticnet', 'alpha': 0.01, 'loss': 'modified_huber', 'fit_intercept': True, 'tol': 1e-3}
     model = SGDClassifier(**params)
 
-    model.fit(X_train, y_train)  # predict(X_test)
+    model.fit(X, y)  # predict(X_test)
     # print('... n_coeffs: %d =>\n%s\n' % (len(model.coef_), model.coef_))
 
     assert hasattr(model, 'coef_'), "%s has no coef_!" % model
@@ -2130,8 +2124,8 @@ def visualize_coeffs(ts, file_name='', features=[], label='label', ts_test=None)
     plt.yticks(fontsize=6)
     plt.title("Coefficients in the Elastic Net Model", fontsize=12)
 
-    if file_name == '': file_name = 'coeffs'
-    saveFig(plt, plot_path(name=file_name), dpi=300)
+    if output_file == '': output_file = 'coeffs'
+    saveFig(plt, plot_path(name=output_file), dpi=300)
 
     return model
 

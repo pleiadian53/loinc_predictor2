@@ -313,7 +313,7 @@ def combine_loinc_mapping(verbose=1, save=True, **kargs):
 
     short_to_long, parsed_loinc_fields = parse_loinc()
     system_map_final = map_loinc_system(parsed_loinc_fields) # loinc system (abbrev) to its full name via comparison with LN
-    loinc_terms_max = map_loinc_token_counts(short_to_long)  # LOINC SN to LN, best match by counts
+    loinc_terms_max = map_loinc_token_counts(short_to_long)  # cross walk between LOINC SN to LN, best match by counts
     if verbose: 
         print("(combine_loinc_mapping) system token mapping to 'best' LN token (by count):\n{}\n".format(
             tabulate(system_map_final.head(20), headers='keys', tablefmt='psql') ))
@@ -524,6 +524,9 @@ def get_matches(data_col, loincmap, save=False):
     
     Params
     ------
+    data_col: an attribute such as test_order_name
+    loincmap: mapping from abbrev or acronyms to their full names according to 
+
     save: set to True to save the output dataframe (the best "translated" version of test strings in terms of LOINC vocab)
     """
     def resolve_by_first_char(src, mapped): 
@@ -743,6 +746,7 @@ def add_string_distance_features():
 def preproces_source_values(df, col='', source_values=[], value_default=""): 
     # import transformer
     return transformer.preproces_source_values(df=df, col=col, source_values=source_values, value_default=value_default)
+
 
 def make_string_distance_features(df=None, dataType='test_order_name', loincmap=None, 
        parsed_loinc_fields=None, source_values=[], verbose=1, transformed_vars_only=False, 
@@ -1054,13 +1058,14 @@ def demo_create_distance_vars(save=True):
 
     loincmap = load_loincmap(cohort=cohort)
     if loincmap is None: 
+        print("(feature) Recomputing loincmap ...")
         loincmap, short_to_long, parsed_loinc_fields = combine_loinc_mapping()
         # ... byproduct: loincmap-<cohort>.csv
 
     value_default = ""
-    target_test_cols = ['test_order_name', 'test_result_name', ]
+    target_test_cols = [ 'test_result_name', ] # 'test_order_name',
     for col in target_test_cols: 
-        print("(feature creation) Processing DataType/Column: {} ######\n... dim(data) BEFORE merge: {}\n".format(col, dfp.shape))
+        print("(feature) Processing DataType/Column: {} ######\n... dim(data) BEFORE merge: {}\n".format(col, dfp.shape))
 
         # --- pass df
         # dft = dfp[ [col] ]   # just pass two columns: test_result_loinc_code, test*

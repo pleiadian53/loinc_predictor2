@@ -1,5 +1,6 @@
 import category_encoders as ce
 import numpy as np
+import pandas as pd
 
 def encode_vars_via_lookup(fset, feature_lookup): 
     # import category_encoders as ce
@@ -81,6 +82,20 @@ def categorify(df, cat_cols, cont_cols=[],  verbose=1):
     #     # print('> dim(X): {}, dim(y): {}'.format(X.shape, y.shape))
     return df
 
+def remove_null_like_values(source_values, extended='%'): 
+    import string 
+
+    punctuations = string.punctuation + extended
+
+    new_values = []
+    for source_value in source_values: 
+        if pd.isna(source_value): continue
+        new_value = str(source_value).translate(str.maketrans('', '', punctuations)).strip()
+        if len(new_value) > 0: 
+            new_values.append(new_value)
+        # if removing punctuations result in empty string, then the value may carry no information (e.g. %)
+    return new_values
+
 def preproces_source_values(df=None, col='', source_values=[], value_default=""): 
     """
     Assuming that the input source values are strings, this function 
@@ -88,8 +103,7 @@ def preproces_source_values(df=None, col='', source_values=[], value_default="")
     and remove redundant spaces in the front and back of the source values.  
 
     """
-
-    import pandas as pd
+    # import pandas as pd
     
     hasValidDf = df is not None and col in df.columns
     if isinstance(source_values, str): source_values = [source_values, ]
@@ -99,7 +113,7 @@ def preproces_source_values(df=None, col='', source_values=[], value_default="")
         
     source_values_processed = []
     n_null = n_numeric = 0
-    for source_value in df[col].values: 
+    for source_value in source_values: 
         if pd.isna(source_value): 
             source_values_processed.append(value_default)
             n_null += 1
@@ -121,7 +135,22 @@ def remove_duplicates(s, sep=" "):
 def join_feature_names(cols, sep='_'): 
     return remove_duplicates(sep.join(cols), sep=sep)
 
-def conjoin(df, cols=[], transformed_vars_only=True, sep=" ", remove_dup=True, col_output=''):
+def conjoin0(source_values, sep=" ", remove_dup=False): 
+    import pandas as pd
+
+    # new_value = sep.join([str(source_value).strip() for source_value in source_values])
+    new_values = []
+    for source_value in source_values: 
+        if not pd.isna(source_value): 
+            new_values.append(str(source_value).strip())
+    new_value = sep.join(new_values)
+
+    if remove_dup: 
+        tokens = new_value.split(sep)
+        new_value = sep.join(sorted(set(tokens), key=tokens.index))
+    return new_value
+
+def conjoin(df, cols=[], transformed_vars_only=True, sep=" ", remove_dup=False, col_output=''):
     # combine text data from across multiple columns
     
     if len(cols) > 1: 
@@ -239,17 +268,13 @@ def resolve_duplicate(df, cols=['test_result_loinc_code', ], add_count=True, col
 
     return df
 
-def dehyphenate(df, col='test_result_loinc_code'): # 'LOINC_NUM'
-    cols = []
-    if isinstance(col, str):
-        cols.append(col)
-    else: 
-        assert isinstance(col, (list, tuple, np.ndarray))
-        cols = col
+def dehyphenate(df, col='test_result_loinc_code', drop_cbit=False): # 'LOINC_NUM'
+    import loinc 
+    return loinc.dehyphenate(df, col=col, drop_cbit=drop_cbit)
 
-    for c in cols: 
-        df[c] = df[c].str.replace('-','')
-    return df
+def dequote(df, col='Medivo Test Result Type'):
+    import loinc
+    return loinc.dequote(df, col=col)
 
 def trim_tail(df, col='test_result_loinc_code', delimit=['.', ';']):
     df[col] = df[col].str.lower().replace('(\.|;)[a-zA-Z0-9]*', '', regex=True)

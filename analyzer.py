@@ -12,8 +12,14 @@ from tabulate import tabulate
 import common
 import data_processor as dproc
 
+from utils_sys import highlight
 from utils_plot import saveFig # contains "matplotlib.use('Agg')" which needs to be called before pyplot 
 from matplotlib import pyplot as plt
+
+from loinc import LoincTable, LoincTSet
+from loinc_mtrt import LoincMTRT
+from loinc import load_loinc_table
+from loinc_mtrt import load_loinc_to_mtrt
 
 """
 
@@ -324,7 +330,9 @@ def analyze_path(X, y, model=None, p_grid={}, feature_set=[], n_trials=100, n_tr
     """
 
     Given the training data (X, y) and a tree-based model (e.g. Decision Tree), 
-    train the model and analyze the decision paths: 
+    train the model and analyze its decision paths (i.e. sequence of variables 
+    served as split points from the root to the leaf): 
+
        1) count the occurrences of decision paths
 
     """
@@ -605,17 +613,6 @@ def label_by_performance(cohort='hepatitis-c', th_low=0.50, th_high=0.90, catego
 
     return ccmap
 
-def load_loinc_table(input_dir='LoincTable', input_file='', **kargs):
-    import loinc as ul
-    return ul.load_loinc_table(input_dir=input_dir, input_file=input_file, **kargs)
-
-def load_loinc_to_mtrt(input_file='loinc-leela.csv', **kargs):
-    # import loinc as ul
-    sep = kargs.get('sep', ',')
-    input_dir = kargs.get('input_dir', os.path.join(os.getcwd(), 'data'))
-    df = load_generic(input_dir=input_dir, input_file=input_file, sep=sep) 
-    return df
-
 def sample_df_values(df, cols=[], **kargs): 
 
     n_samples = kargs.get('n_samples', 10) # show example n values
@@ -670,101 +667,6 @@ def det_cardinality(df, **kargs):
                 else: 
                     adict[col] = len(np.unique(values))
     return adict
-
-def sample_loinc_table(codes=[], cols=[], input_dir='LoincTable', input_file='', **kargs): 
-    from transformer import dehyphenate
-    # from tabulate import tabulate
-
-    col_key = kargs.get('col_key', 'LOINC_NUM')
-    n_samples = kargs.get('n_samples', 10) # if -1, show all codes
-    verbose = kargs.get('verbose', 1)
-
-    df = load_loinc_table(input_dir=input_dir, input_file=input_file, **kargs)
-    df = dehyphenate(df, col=col_key)  # inplace
-
-    if not cols: cols = df.columns.values
-    if len(codes) == 0: 
-        codes = df.sample(n=n_samples)[col_key].values
-    else:  
-        codes = np.random.choice(codes, min(n_samples, len(codes)))
-
-    msg = ''
-    code_documented = set(df[col_key].values) # note that externally provided codes may not even be in the table!
-    adict = {code:{} for code in codes}
-    for i, code in enumerate(codes):  # foreach target codes
-        ieff = i+1
-        if code in code_documented: 
-            dfi = df.loc[df[col_key] == code] # there should be only one row for a given code
-            assert dfi.shape[0] == 1, "code {} has multiple rows: {}".format(code, tabulate(dfi, headers='keys', tablefmt='psql'))
-            msg += f"[{ieff}] loinc: {code}:\n"
-            for col in cols: 
-                v = list(dfi[col].values)
-                if len(v) == 1: v = v[0]
-                msg += "  - {}: {}\n".format(col, v)
-
-            adict[code] = sample_df_values(dfi, verbose=0) # sample_df_values() returns a dictionary: column -> value
-    if verbose: print(msg)
-
-    return adict
-
-def analyze_loinc_values(ccmap, cols=[], verbose=1, col_code='LOINC_NUM'):
-    """
-
-    Related
-    -------
-    analyze_feature_values
-    """
-    return  analyze_by_values(ccmap, cols=cols, verbose=verbose, col_code=col_code)
-def analyze_by_values(ccmap, cols=[], verbose=1, col_code=''): 
-    """
-    Input
-    -----
-    ccmap: a dictionary from 'class' to a list of codes associated with the class
-           where a class given to each LOINC code to specify an analysis category (e.g. easy vs hard, 
-           as in easy to classify or hard to classify)
-
-           Use label_by_* methods to generate this ccmap (i.e. code-to-category mapping)
-           (e.g. label_by_performance()) 
-    
-    """
-    import loinc as ul   
-    from transformer import canonicalize, dehyphenate
-    assert isinstance(ccmap, dict)
-
-    df_loinc = load_loinc_table(dehyphenate=True) # input_dir/'LoincTable', input_file/'LoincTable.csv', sep/','
-    # dehyphenate(df_loinc, col=col_code)  # inplace
-
-    if not col_code: col_code = ul.LoincTable.col_key  # 'LOINC_NUM'
-    
-    target_cols = cols
-    if len(cols) == 0: 
-        
-        text_cols = ul.LoincTable.text_cols #  ['LONG_COMMON_NAME', 'SHORTNAME', 'RELATEDNAMES2', 'STATUS_TEXT']
-        property_cols = ul.LoincTable.p6 + ['CLASS', ] # [ 'COMPONENT', 'PROPERTY', 'TIME_ASPCT', 'SYSTEM', 'METHOD_TYP', 'SCALE_TYP', 'CLASS', ]  
-        target_cols = [col_code, ] + text_cols + property_cols
-    # ... only select above columns from the loinc table
-
-    D = {}
-    for i, (cat, codes) in enumerate(ccmap.items()): 
-        assert len(codes) > 0
-        # e.g. codes_hard = df.loc[df['label'] == 'hard'][ 'code' ].values
-
-        # if i < 10: 
-        #     print("> cat: {} => codes: {}".format(cat, codes[:10]))
-        #     print("> codes_src: {}".format(df_loinc[col_code]))
-        
-        # take the rows of these codes and inspect the columns in 'target_cols'
-        D[cat] = df_loinc.loc[df_loinc[col_code].isin(codes)][target_cols]
-
-        if verbose: print("(analyze_by_values) Case {} (n={}):".format(cat, len(codes)))
-        for i, (r, row) in enumerate(D[cat].iterrows()):
-            ieff = i+1
-            code = row[col_code]
-            p6 = [row['PROPERTY'], row['TIME_ASPCT'], row['SYSTEM'], row['METHOD_TYP'], row['SCALE_TYP'], row['CLASS']]
-            six_parts = ', '.join(str(e) for e in p6)
-            if verbose: print("  [{}] {} (6p: <{}>) =>\n ... {}\n".format(ieff, code, six_parts, row['LONG_COMMON_NAME']))
-
-    return D
 
 def runWorkflow(X, y, features, model=None, param_grid={}, **kargs):
     """
@@ -1062,18 +964,71 @@ def balance_data(df, df2=None, n_samples=-1, col='test_result_loinc_code', label
 def plot_barh(perf, metric='fmax', **kargs): 
     return evaluate.plot_barh(perf, metric=metric, **kargs)
 
-def compare_col_values(df, cols, n=10, mode='sampling', verbose=1, random_state=53):   
+def compare_col_values(df, cols, n=10, mode='sampling', verbose=2, **kargs):   
+    from loinc import compare_6parts
+
+    random_state = kargs.get('random_state')
+    include_6parts = kargs.get('include_6parts', False)
+    include_mtrt = kargs.get('include_mtrt', False)
+    df_loinc = kargs.get('df_loinc', None)
+    col_code = kargs.get('col_code', LoincTSet.col_code) # test_result_loinc_code
+    dehyphen = kargs.get('dehyphenate', True)
+
+    if not LoincTSet.col_code in cols: cols = [col_code, ] + list(cols)
+
+    # all target LOINC codes
+    codes = df[col_code].unique()
+
     df = col_values2(df, cols=cols, n=n, mode=mode, random_state=random_state, keep='last')
-    
     if mode.startswith(('s', 'r')): assert df.shape[0] <=n, "dim(df): {}".format(df)
 
+    D6p = {}
+    if include_6parts: 
+        if df_loinc is None: df_loinc = load_loinc_table(dehyphenate=dehyphen)
+        D6p = compare_6parts(df_loinc, codes=codes, verbose=1)
+        print("(compare_col_values) attributes for a given code:\n{}\n".format( list(next(iter(D6p.values())).keys()) ))
+
+    Dm = {}
+    if include_mtrt: 
+        col_mval = LoincMTRT.col_value # MTRT
+        col_mkey = LoincMTRT.col_key    # loinc codes in the mtrt table
+        df_mtrt = LoincMTRT.load_table(dehyphenate=dehyphen, one_to_one=True)
+         
+        for code in codes:
+            dfe = df_mtrt[df_mtrt[col_mkey] == code]
+            if not dfe.empty:  
+                Dm[code] = dfe[col_mval].iloc[0]
+
     adict = {col:[] for col in cols}
+    codes_undef = set([]) 
     for i, (r, row) in enumerate(df.iterrows()): 
-        msg = "[{}] iloc={}, cols={}\n".format(i+1, r, cols)
+        code = row[col_code]
+        msg = "[{}] Code: {} | iloc={}, cols={}\n".format(i+1, code, r, cols)
         for col in cols: 
             adict[col].append(row[col])
             msg += "    + {}: {}\n".format(col, row[col])
-        if verbose: print(msg)
+
+        # -------------------------------------------
+        if code in Dm: 
+            msg += "    + {}: {}\n".format('MTRT', Dm[code])
+
+        if len(D6p) > 0: 
+            cols_6p = LoincTable.cols_6p   # ['COMPONENT', 'PROPERTY', 'TIME_ASPCT', 'SYSTEM', 'SCALE_TYP', 'METHOD_TYP', ]
+            
+            # it's possible that the loinc code is not found in the standard LOINC table
+            if code in D6p: 
+                for col, val in D6p[code].items(): 
+                    if verbose == 1 and not col in cols_6p: continue
+                    msg += "      ++ {}: {}\n".format(col, val)
+            else: 
+                if verbose > 1: msg += "\n!!! Code {} not found in LOINC table. Obsolete?\n".format(code)
+                # n_undef += 1
+                codes_undef.add(code)
+
+
+        if verbose: 
+            print(msg)
+    if len(codes_undef) > 0: highlight("Found n={} undefined codes:\n{}\n".format(len(codes_undef), list(codes_undef)))
     return adict
 
 def inspect_col_values(df, cols, mode='unique', verbose=1):
@@ -1092,7 +1047,6 @@ def inspect_col_values(df, cols, mode='unique', verbose=1):
 def analyze_loinc_table(**kargs):
     # from analyzer import load_loinc_table, sample_loinc_table
     import loinc as lc
-    from loinc import LoincMTRT
 
     cols_6p = lc.LoincTable.cols_6p # ["COMPONENT","PROPERTY","TIME_ASPCT","SYSTEM","SCALE_TYP","METHOD_TYP"]   # CLASS
     col_code = 'LOINC_NUM'
@@ -1116,7 +1070,7 @@ def analyze_loinc_table(**kargs):
     D_loinc = lc.compare_short_long_names(df_loinc, codes=codes_low_sz, n_display=30, verbose=1)
 
     ### mtrt vs long name 
-    # df_mtrt = LoincMTRT.load_loinc_to_mtrt(input_file='loinc-leela.csv')
+    # df_mtrt = LoincMTRT.load_table()
     D_mtrt = lc.compare_longname_mtrt(n_display=30, codes=codes_low_sz)
 
     print("[analysis] Can component and system alone uniquely identify most LOINC codes?")
@@ -1190,6 +1144,67 @@ def compare_test_with_6parts(codes=[], df=None, df_loinc=None,
         
     return D
 
+#########################################################################
+# --- Analysis Functions --- # 
+
+def analyze_loinc_values(ccmap, cols=[], verbose=1, col_code='LOINC_NUM'):
+    """
+
+    Related
+    -------
+    analyze_feature_values
+    """
+    return  analyze_by_values(ccmap, cols=cols, verbose=verbose, col_code=col_code)
+def analyze_by_values(ccmap, cols=[], verbose=1, col_code=''): 
+    """
+    Input
+    -----
+    ccmap: a dictionary from 'class' to a list of codes associated with the class
+           where a class given to each LOINC code to specify an analysis category (e.g. easy vs hard, 
+           as in easy to classify or hard to classify)
+
+           Use label_by_* methods to generate this ccmap (i.e. code-to-category mapping)
+           (e.g. label_by_performance()) 
+    
+    """   
+    from transformer import canonicalize, dehyphenate
+    assert isinstance(ccmap, dict)
+
+    df_loinc = load_loinc_table(dehyphenate=True) # input_dir/'LoincTable', input_file/'LoincTable.csv', sep/','
+    # dehyphenate(df_loinc, col=col_code)  # inplace
+
+    if not col_code: col_code = LoincTable.col_key  # 'LOINC_NUM'
+    
+    target_cols = cols
+    if len(cols) == 0: 
+        
+        text_cols = LoincTable.text_cols #  ['LONG_COMMON_NAME', 'SHORTNAME', 'RELATEDNAMES2', 'STATUS_TEXT']
+        property_cols = LoincTable.p6 + ['CLASS', ] # [ 'COMPONENT', 'PROPERTY', 'TIME_ASPCT', 'SYSTEM', 'METHOD_TYP', 'SCALE_TYP', 'CLASS', ]  
+        target_cols = [col_code, ] + text_cols + property_cols
+    # ... only select above columns from the loinc table
+
+    D = {}
+    for i, (cat, codes) in enumerate(ccmap.items()): 
+        assert len(codes) > 0
+        # e.g. codes_hard = df.loc[df['label'] == 'hard'][ 'code' ].values
+
+        # if i < 10: 
+        #     print("> cat: {} => codes: {}".format(cat, codes[:10]))
+        #     print("> codes_src: {}".format(df_loinc[col_code]))
+        
+        # take the rows of these codes and inspect the columns in 'target_cols'
+        D[cat] = df_loinc.loc[df_loinc[col_code].isin(codes)][target_cols]
+
+        if verbose: print("(analyze_by_values) Case {} (n={}):".format(cat, len(codes)))
+        for i, (r, row) in enumerate(D[cat].iterrows()):
+            ieff = i+1
+            code = row[col_code]
+            p6 = [row['PROPERTY'], row['TIME_ASPCT'], row['SYSTEM'], row['METHOD_TYP'], row['SCALE_TYP'], row['CLASS']]
+            six_parts = ', '.join(str(e) for e in p6)
+            if verbose: print("  [{}] {} (6p: <{}>) =>\n ... {}\n".format(ieff, code, six_parts, row['LONG_COMMON_NAME']))
+
+    return D
+
 def analyze_data_set(**kargs):
 
     cohort = 'hepatitis-c'
@@ -1246,7 +1261,10 @@ def analyze_data_set(**kargs):
     print("... N(mtrt_none & TO) ={}, n(mtrt_none)={} | ratio: {}".format(df_no_mtrt_TO.shape[0], N_mtrt_none, df_no_mtrt_TO.shape[0]/(N_mtrt_none+0.0) ))
     print("... N(mtrt_none & TR) ={}, n(mtrt_none)={} | ratio: {}".format(df_no_mtrt_TR.shape[0], N_mtrt_none, df_no_mtrt_TR.shape[0]/(N_mtrt_none+0.0) ))
     print("... N(mtrt_none & TC) ={}, n(mtrt_none)={} | ratio: {}".format(df_no_mtrt_TC.shape[0], N_mtrt_none, df_no_mtrt_TC.shape[0]/(N_mtrt_none+0.0) ))
-
+    # ... [insight]
+    #      1. test_result_comments occur about just as equally among rows with and without MTRT 
+    #         (intuitively, those without MTRT would have lower missing rate for test_result_comments but it's not quite true)
+    #     
     
     # --- Level of difficulty
     df, adict = label_by_types(df=df, cohort=cohort, transformed_vars_only=False)
@@ -1285,15 +1303,59 @@ def analyze_hard_cases(**kargs):
     print("...        n(low):  {} | ratio: {}".format(N_low,  N_low/(N+0.0)))
 
     # a dictionary of LOINC table dataframes indexed by analysis categories (e.g. easy, hard)
+    highlight("[analysis] 6 Parts")
     compare_test_with_6parts(code=ccmap['low'], n_samples=30, target_test_cols=['test_order_name', 'test_result_name']) 
 
     # --- Get text data for the hard cases from 'test_order_name', 'test_result_name', 'test_result_comments', ... 
     codes_low_sz = ccmap['low']
     dfp = load_src_data(cohort='hepatitis-c', warn_bad_lines=False, canonicalized=True, processed=True)
     dim0 = dfp.shape
-    dfp = dfp.loc[dfp[col_target].isin(codes_low_sz)]
-    print("[analysis] dim(df)<low sample size>: {} | dim(df)<original>: {}".format(dfp.shape, dim0))
+    df_lsz = dfp.loc[dfp[col_target].isin(codes_low_sz)]
+    print("[analysis] dim(df)<low sample size>: {} | dim(df)<original>: {}".format(df_lsz.shape, dim0))
+
+    highlight("[analysis] T-attributes, which ones can predict which LOINC parts?")
+    # T-attributes? e.g. test_order_name, test_result_name ... 
+
+    target_cols = ['test_order_name', 'test_result_name', 'test_result_comments', 'test_specimen_type',  'test_result_units_of_measure'] # 'panel_order_name'
+    compare_col_values(df_lsz, target_cols, n=100, mode='sampling', 
+        include_6parts=True, include_mtrt=True, verbose=2, random_state=53)
+
+    # --- 
+    highlight("[analysis] Some features only have values in a subset of rows and may not be consistent?")
+    # e.g. test_specimen_type of only has value in a subset of the rows associated with a LOINC code? 
     
+    col_code = LoincTSet.col_code
+    # --- LOINC table attributes
+    col_ln, col_sn = LoincTable.long_name, LoincTable.short_name
+    col_lkey = LoincTable.col_key
+    ##################################
+    # --- Loinc to MTRT attributes (from Leela)
+    col_mval = LoincMTRT.col_value
+    col_mkey = LoincMTRT.col_key    # loinc codes in the mtrt table
+
+    target_cols = ['test_order_name', 'test_result_name', 'test_specimen_type',   ]
+    adict = {}
+    n_hetero = 0
+    for code, dfe in df_lsz.groupby([col_code, ]):
+        adict[code] = {col:set([]) for col in target_cols}
+        
+        nvalues = set([])
+        for col in target_cols: 
+            # do these column always have consistent values
+            vals = dfe[col].unique()
+            adict[code][col] = vals
+            nvalues.add(len(vals))
+
+        if len(nvalues) > 1: 
+            msg = "... Code: {} has multiple values observed in some attributes (e.g. >=2 test_order_name) ...\n".format(code)
+            for col, values in adict[code].items(): 
+                msg += "    + {} (nv={})\n".format(col, len(values))
+                for i, v in enumerate(values): 
+                    msg += "      ++ {}\n".format(v)
+            print(msg)
+            n_hetero += 1
+    highlight("... Found n={} codes associated attributes having > values (e.g. same code, >1 values intest_order_name)".format(n_hetero))
+            
     return
 
 def analyze_feature_values():
@@ -1305,6 +1367,8 @@ def analyze_feature_values():
     """
     from utils_sys import size_hashtable
 
+    # If we decide to filter the sample by disease cohort or type ... 
+    # ---------------------------------------------------------- 
     cohort = 'hepatitis-c'
     col_target = 'test_result_loinc_code'
     categories = ['easy', 'hard', 'low']  # low: low sample size
@@ -1313,10 +1377,11 @@ def analyze_feature_values():
     N_easy = len(ccmap['easy'])
     N_hard = len(ccmap['hard'])
     N_low = len(ccmap['low'])
+    # ----------------------------------------------------------
 
-    target_cols = ['test_order_name', 'test_result_name', ]
+    target_cols = ['test_order_name', 'test_result_name', 'test_specimen_type',   ]
     # target_cols = ['test_order_name', 'TestOrderMapJW', 'TOPredictedComponentJW', 'TOMatchDistComponentJW',]
-
+    
     for col in target_cols: 
         input_file = f'{col}-sdist-vars.csv'
         df = load_generic(input_file=input_file, sep=',')
@@ -1337,13 +1402,14 @@ def analyze_feature_values():
             # ... target_cols determined 
             compare_col_values(df, target_cols, n=50, mode='sampling', verbose=1, random_state=53)
 
+
     return
 
 def analyze_missing_cases(df, **kargs):
     pass
 
 ########################################################################
-# --- Example Usage and Test Cases
+# --- Example Usage and Test Cases --- #
 
 def demo_io(**kargs):
 
@@ -1544,7 +1610,7 @@ def demo_loinc(**kargs):
     return
 
 def test(**kargs):
-    subjects = ['feature', ] # {'table', 'ts'/'data', 'hard', 'feature'/'vars'}
+    subjects = [ 'hard', ] # {'table', 'ts'/'data', 'hard', 'feature'/'vars'}
     verbose = 1
 
     for subject in subjects: 

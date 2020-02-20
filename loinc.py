@@ -1,44 +1,43 @@
 import re, os
 import pandas as pd
 import numpy as np
+import data_processor as dp
+
+class SharedProperties(object): 
+    col_unknown = "unknown"
+    col_joined = "LOINC_MTRT"
+    col_corpus = "corpus"
 
 class LoincTable(object): 
-    cols_6p = six_parts = p6 = ["COMPONENT","PROPERTY","TIME_ASPCT","SYSTEM","SCALE_TYP","METHOD_TYP"]  # ['CLASS']
-    text_cols = ['LONG_COMMON_NAME', 'SHORTNAME', 'RELATEDNAMES2', 'STATUS_TEXT']
 
-    # noisy codes 
-    noisy_codes = ['request', 'no loinc needed', '.', ';', 'coumt', 'unloinc']  # made lower case
+    # noisy codes defined in LoincTSet
+    # noisy_codes = ['request', 'no loinc needed', '.', ';', 'coumt', 'unloinc']  # made lower case
     
-    table_key_map = {'MapTo.csv': ['LOINC', 'MAP_TO'], 'Loinc.csv': 'LOINC_NUM'}
-
-    col_key = col_code = 'LOINC_NUM'
-    col_key_mtrt = 'test_result_loinc_code'
+    table_key_map = {'MapTo.csv': ['LOINC', 'MAP_TO'], 
+                     'Loinc.csv': 'LOINC_NUM'}
 
     file_table = 'Loinc.csv'
     input_dir = os.path.join(os.getcwd(), 'LoincTable')
     input_path = os.path.join(input_dir, file_table)
 
-    long_name = 'LONG_COMMON_NAME'
-    short_name = 'SHORTNAME'
+    col_key = col_code = 'LOINC_NUM'
+    col_ln = long_name = 'LONG_COMMON_NAME'
+    col_sn = short_name = 'SHORTNAME'
+    col_com = 'COMPONENT'
+    col_sys = 'SYSTEM'
+    col_method = 'METHOD_TYP'
+
+    cols_6p = six_parts = p6 = ['COMPONENT', 'PROPERTY', 'TIME_ASPCT', 'SYSTEM', 'SCALE_TYP', 'METHOD_TYP', ]  # ['CLASS']
+    text_cols = ['LONG_COMMON_NAME', 'SHORTNAME', 'RELATEDNAMES2', 'STATUS_TEXT'] + cols_6p
 
     stop_words = ["IN", "FROM", "ON", "OR", "OF", "BY", "AND", "&", "TO", "BY", "", " "]
 
     @staticmethod
-    def load(**kargs): 
-        from transformer import dehyphenate
-        sep = kargs.get('sep', ',')
-        dehyphen = kargs.get('dehyphenate', False)
-        input_path = kargs.get('input_path', LoincTable.input_path)
-        assert os.path.exists(input_path), "Invalid path: {}".format(input_path)
-
-        df = pd.read_csv(input_path, sep=sep, header=0, index_col=None, error_bad_lines=False)
-        print("> dim(table): {}".format(df.shape)) 
-
-        if dehyphen: 
-            col_key = LoincTable.table_key_map.get(input_file, LoincTable.col_code) # 'LOINC_NUM'
-            df = dehyphenate(df, col=col_key)  # inplace
-
-        return df
+    def load(input_dir='LoincTable', input_file='', **kargs): 
+        return load_loinc_table(input_dir=input_dir, input_file=input_file, **kargs)
+    @staticmethod
+    def load_table(input_dir='LoincTable', input_file='', **kargs):
+        return load_loinc_table(input_dir=input_dir, input_file=input_file, **kargs)
 
 class TSet(object): 
     noisy_codes = ['request', 'no loinc needed', '.', ';', 'coumt', 'unloinc'] 
@@ -53,8 +52,13 @@ class LoincTSet(TSet):
     noisy_codes = ['request', 'no loinc needed', '.', ';', 'coumt', 'unloinc'] 
     sites = meta_sender_names = ['Athena', 'Saturn', 'Apollo', 'Poseidon', 'Zeus', 'Plutus', 'Ares']
 
-    col_target = 'test_result_loinc_code'
+    col_code = col_target = col_label = 'test_result_loinc_code'
     col_tag = 'medivo_test_result_type'
+
+    # derived features 
+    col_corpus = 'corpus'
+    col_unknown = 'unknown'
+    null_codes = [col_unknown, 'other', ]
 
     cols_result_name_cleaned = ['Site', 'OriginalTestResult', 'CleanedTestResult']
     cols_order_name_cleaned = ["Site", "OriginalTestOrder", "CleanedTestOrder"]
@@ -68,6 +72,8 @@ class LoincTSet(TSet):
         'medivo_test_result_type': 'MTRT', }
 
     cols_sdist_matched_loinc = ["PredictedComponent", "ComponentMatchDist", "PredictedSystem", "SystemMatchDist", ]
+
+    file_merged_loinc_mtrt = "loinc_mtrt.corpus"
 
     @staticmethod
     def get_cols_cleaned(dtype): 
@@ -137,74 +143,12 @@ class LoincTSet(TSet):
 
 ### LoincTSet
 
-class LoincMTRT(object):
-    header = ['Test Result LOINC Code', 'Medivo Test Result Type']
-    col_code = col_key = "Test Result LOINC Code" # use the loinc code as key even though we are primarily interested in predicting loinc from mtrt
-    col_value = "Medivo Test Result Type"
-    table = 'loinc-leela.csv'
-    table_prime = 'loinc-leela-derived.csv'
-
-    stop_words = ["IN", "FROM", "ON", "OR", "OF", "BY", "AND", "&", "TO", "BY", "", " "]
-
-    @staticmethod
-    def load_loinc_to_mtrt(input_file=table, **kargs):
-        from transformer import dehyphenate
-        sep = kargs.get('sep', ',')
-        input_dir = kargs.get('input_dir', 'data')
-        dehyphen = kargs.get('dehyphenate', True)
-        deq = kargs.get('dequote', True)
-
-        df = load_generic(input_file=input_file, sep=sep, input_dir=input_dir) 
-        if dehyphen: 
-            df = dehyphenate(df, col=LoincMTRT.col_key)  # inplace
-
-        if deq: 
-            df = dequote(df, col=LoincMTRT.col_value)
-        return df
-    @staticmethod
-    def save_loinc_to_mtrt(df, **kargs):
-
-        return
-
-    @staticmethod
-    def save_derived_loinc_to_mtrt(df, **kargs):
-        sep = kargs.get('sep', ',')
-        output_dir = kargs.get('output_dir', 'data')
-        output_file = kargs.get("output_file", LoincMTRT.table_prime)
-        dehyphen = kargs.get('dehyphenate', True)
-        deq = kargs.get('dequote', True)
-
-        if dehyphen: 
-            df = dehyphenate(df, col=LoincMTRT.col_key)  # inplace
-        if deq: 
-            df = dequote(df, col=LoincMTRT.col_value)
-
-        save_generic(df, sep=sep, output_file=output_file, output_dir=output_dir) 
-        return  
-    @staticmethod
-    def load_derived_loinc_to_mtrt(**kargs):
-        sep = kargs.get('sep', ',')
-        input_dir = kargs.get('input_dir', 'data')
-        input_file = kargs.get("input_file", LoincMTRT.table_prime)
-
-        # [output[] None if file not found
-        return load_generic(input_file=input_file, sep=sep, input_dir=input_dir) 
-
-    @staticmethod
-    def transform():
-        """
-        Transform the LOINC-to-MTRT table (generated from leela) such that the column names 
-        are in lowcase with words separated by underscores. 
-
-        e.g. Test Result LOINC Code => test_result_loinc_code
-
-        Additionally, can add additional attributes derived from the baseline columns (e.g. word embedding, 
-        term mappings, etc)
-
-        """
-        pass
+# Note: LoincMTRT refactored to loinc_mtrt.py
+# class LoincMTRT():
+#     pass
 
 class FeatureSet(object):
+
     cat_cols = ['patient_gender', 
                 'patient_state',  # n_uniq=199
                 'patient_bill_type',  # n_uniq=31
@@ -326,12 +270,19 @@ class FeatureSet(object):
 #########################################################################
 # I/O utilities 
 
+def load_loinc_synonyms(input_file='loinc_synonyms.csv', **kargs):
+    import LOINCSynonyms as lsyno
+    df = lsyno.load_synosyms(input_file=input_file, **kargs)
+    if df is None or df.empty: 
+        df = lsyno.get_loinc_synonyms()
+    return df
+
 def load_loinc_table(input_dir='LoincTable', input_file='', **kargs):
     from transformer import dehyphenate
-    import loinc as ul
 
     sep = kargs.get('sep', ',')
     dehyphen = kargs.get('dehyphenate', False)
+    drop_cbit = kargs.get("drop_cbit", False)  # drop correction bit
 
     if not input_dir: input_dir = kargs.get('input_dir', "LoincTable") # os.path.join(os.getcwd(), 'result')
     if not input_file: input_file = "Loinc.csv"
@@ -342,25 +293,77 @@ def load_loinc_table(input_dir='LoincTable', input_file='', **kargs):
     print("> dim(table): {}".format(df.shape)) 
 
     if dehyphen: 
-        col_key = ul.LoincTable.table_key_map.get(input_file, LoincTable.col_code) # 'LOINC_NUM'
-        df = dehyphenate(df, col=col_key)  # inplace
+        col_key = LoincTable.table_key_map.get(input_file, LoincTable.col_code) # 'LOINC_NUM'
+        df = dehyphenate(df, col=col_key, drop_cbit=drop_cbit)  # inplace
 
     return df
 
-def load_loinc_to_mtrt(input_file='loinc-leela.csv', **kargs):
-    from analyzer import load_generic
-    sep = kargs.get('sep', ',')
-    input_dir = kargs.get('input_dir', os.path.join(os.getcwd(), 'data'))
-    df = load_generic(input_dir=input_dir, input_file=input_file, sep=sep) 
+# --- LOINC Utilities 
+########################################################################
+
+def expand_by_longname(df, col_src='test_result_loinc_code', 
+                col_derived='test_result_loinc_longname', df_ref=None, transformed_vars_only=False, dehyphenate=True):
+    # from loinc import LoincMTRT, LoincTable
+    # --- LOINC table attributes
+    col_ln, col_sn = LoincTable.long_name, LoincTable.short_name
+    col_lkey = LoincTable.col_key
+    
+    if df_ref is None: df_ref = load_loinc_table(dehyphenate=dehyphenate)
+    
+    # consider the following LOINC codes
+    uniq_codes = df[col_src].unique()
+    df_ref = df_ref.loc[df_ref[col_lkey].isin(uniq_codes)][[col_lkey, col_ln]]
+    
+    if transformed_vars_only: 
+        return df_ref
+
+    df = pd.merge(df, df_ref, left_on=col_src, right_on=col_lkey, how='left').drop([col_lkey], axis=1)
+    df.rename({col_ln: col_derived}, axis=1, inplace=True)
 
     return df
+
+def sample_loinc_table(codes=[], cols=[], input_dir='LoincTable', input_file='', **kargs): 
+    from transformer import dehyphenate
+    # from tabulate import tabulate
+
+    col_key = kargs.get('col_key', 'LOINC_NUM')
+    n_samples = kargs.get('n_samples', 10) # if -1, show all codes
+    verbose = kargs.get('verbose', 1)
+
+    df = load_loinc_table(input_dir=input_dir, input_file=input_file, **kargs)
+    df = dehyphenate(df, col=col_key)  # inplace
+
+    if not cols: cols = df.columns.values
+    if len(codes) == 0: 
+        codes = df.sample(n=n_samples)[col_key].values
+    else:  
+        codes = np.random.choice(codes, min(n_samples, len(codes)))
+
+    msg = ''
+    code_documented = set(df[col_key].values) # note that externally provided codes may not even be in the table!
+    adict = {code:{} for code in codes}
+    for i, code in enumerate(codes):  # foreach target codes
+        ieff = i+1
+        if code in code_documented: 
+            dfi = df.loc[df[col_key] == code] # there should be only one row for a given code
+            assert dfi.shape[0] == 1, "code {} has multiple rows: {}".format(code, tabulate(dfi, headers='keys', tablefmt='psql'))
+            msg += f"[{ieff}] loinc: {code}:\n"
+            for col in cols: 
+                v = list(dfi[col].values)
+                if len(v) == 1: v = v[0]
+                msg += "  - {}: {}\n".format(col, v)
+
+            adict[code] = sample_df_values(dfi, verbose=0) # sample_df_values() returns a dictionary: column -> value
+    if verbose: print(msg)
+
+    return adict
 
 
 # Comparison methods
 #########################################################################
 # ... analysis utilties
 
-def compare_6parts(df=None, codes=[], n_samples=-1, cols_6p=[], verbose=1): 
+def compare_6parts(df=None, codes=[], n_samples=-1, cols_6p=[], verbose=1, explicit=True): 
     if df is None: df = load_loinc_table(dehyphenate=True)
     col_code = LoincTable.col_code
     adict = {}
@@ -374,9 +377,8 @@ def compare_6parts(df=None, codes=[], n_samples=-1, cols_6p=[], verbose=1):
             codes = np.random.choice(codes, min(n_samples, len(codes)))
 
     target_properties = ['SHORTNAME', 'LONG_COMMON_NAME', ]
-    if not cols_6p: 
-        cols_6p = ['COMPONENT', 'PROPERTY', 'TIME_ASPCT', 'SYSTEM', 'METHOD_TYP', 'SCALE_TYP']
-        target_properties = target_properties + cols_6p 
+    if not cols_6p: cols_6p = LoincTable.cols_6p # ['COMPONENT', 'PROPERTY', 'TIME_ASPCT', 'SYSTEM', 'SCALE_TYP', 'METHOD_TYP', ]
+    target_properties = target_properties + cols_6p 
     
     for r, row in df.iterrows():
         code = row[col_code]
@@ -385,8 +387,18 @@ def compare_6parts(df=None, codes=[], n_samples=-1, cols_6p=[], verbose=1):
         #     list(row.index.values), cols_6p)
 
         if len(codes)==0 or (code in codes): 
-            p6 = [row[part] for part in cols_6p]
-            six_parts = ': '.join(str(e) for e in p6)
+            if explicit: 
+                p6 =  [(part, row[part]) for part in cols_6p]
+                six_parts = ""
+                for i, part in enumerate(cols_6p): 
+                    if i == 0: 
+                        six_parts += "{}=\"{}\"".format(part, row[part])
+                    else: 
+                        six_parts += ", {}=\"{}\"".format(part, row[part])
+            else:
+                p6 = [row[part] for part in cols_6p]
+                six_parts = ": ".join(str(e) for e in p6)
+
             if verbose: 
                 msg = "[{}] {} (6p: {}) =>\n ... {}\n".format(r+1, code, six_parts, row['LONG_COMMON_NAME'])
                 print(msg)
@@ -432,7 +444,7 @@ def compare_longname_mtrt(df_mtrt=None, df_loinc=None, n_display=-1, codes=[], *
     verbose = kargs.get('verbose', 1)
 
     table_mtrt = kargs.get('input_mtrt', 'loinc-leela.csv')
-    if df_mtrt is None: df_mtrt = LoincMTRT.load_loinc_to_mtrt(input_file=table_mtrt)
+    if df_mtrt is None: df_mtrt = LoincMTRT.load_table()
     if df_loinc is None: df_loinc = load_loinc_table(dehyphenate=True)
 
     col_key_mtrt, col_value_mtrt = LoincMTRT.col_key, LoincMTRT.col_value
@@ -523,7 +535,7 @@ def group_by(df_loinc=None, cols=['COMPONENT', 'SYSTEM',], verbose=1, n_samples=
     col_code = LoincTable.col_code
 
     target_properties = ['SHORTNAME', ] # 'LONG_COMMON_NAME'
-    cols_6p = ['COMPONENT', 'PROPERTY', 'TIME_ASPCT', 'SYSTEM', 'METHOD_TYP', 'SCALE_TYP']
+    cols_6p = LoincTable.cols_6p # ['COMPONENT', 'PROPERTY', 'TIME_ASPCT', 'SYSTEM', 'METHOD_TYP', 'SCALE_TYP']
     target_properties = [col_code, ] + target_properties + LoincTable.cols_6p 
 
     adict = {}
@@ -544,7 +556,14 @@ def group_by(df_loinc=None, cols=['COMPONENT', 'SYSTEM',], verbose=1, n_samples=
 
 ########################################################################
 
-def dehyphenate(df, col='test_result_loinc_code'): # 'LOINC_NUM'
+def dehyphenate(df, col='test_result_loinc_code', drop_cbit=False): # 'LOINC_NUM
+    """
+
+    Memo
+    ----
+    1. dropping correction bit leads to more unrecognized codes (not found in the LOINC table), 
+       suggesting that hyphenization is a source of noise
+    """
     cols = []
     if isinstance(col, str):
         cols.append(col)
@@ -552,8 +571,12 @@ def dehyphenate(df, col='test_result_loinc_code'): # 'LOINC_NUM'
         assert isinstance(col, (list, tuple, np.ndarray))
         cols = col
 
-    for c in cols: 
-        df[c] = df[c].str.replace('-','')
+    if drop_cbit: 
+        for c in cols: 
+            df[c] = df[c].replace(regex=r'-\d+', value='')
+    else: 
+        for c in cols: 
+            df[c] = df[c].str.replace('-','')
     return df
 
 def dequote(df, col='Medivo Test Result Type'):
@@ -572,7 +595,7 @@ def trim_tail(df, col='test_result_loinc_code', delimit=['.', ';']):
     df[col] = df[col].str.lower().replace('(\.|;)[a-zA-Z0-9]*', '', regex=True)
     return df 
 
-def replace_values(df, values=['.', ], new_value='Unknown', col='test_result_loinc_code'):
+def replace_values(df, values=['.', ], new_value='unknown', col='test_result_loinc_code'):
     for v in values: 
         df[col] = df[col].str.lower().replace(v, new_value)
     
@@ -646,38 +669,6 @@ def canonicalize(df, col_target="test_result_loinc_code",
 
     return df
 
-def save_generic(df, cohort='', dtype='ts', output_file='', sep=',', **kargs):
-    output_dir = kargs.get('output_dir', 'data')
-    verbose=kargs.get('verbose', 1)
-    if not output_file: 
-        if cohort: 
-            output_file = f"{dtype}-{cohort}.csv" 
-        else: 
-            output_file = "test.csv"
-    output_path = os.path.join(output_dir, output_file)
-
-    df.to_csv(output_path, sep=sep, index=False, header=True)
-    if verbose: print("(save_generic) Saved dataframe (dim={}) to:\n{}\n".format(df.shape, output_path))
-    return  
-def load_generic(cohort='', dtype='ts', input_file='', sep=',', **kargs):
-    input_dir = kargs.get('input_dir', 'data')
-    verbose=kargs.get('verbose', 1)
-    if not input_file: 
-        if cohort: 
-            input_file = f"{dtype}-{cohort}.csv" 
-        else: 
-            input_file = "test.csv"
-    input_path = os.path.join(input_dir, input_file)
-
-    if os.path.exists(input_path) and os.path.getsize(input_path) > 0: 
-        df = pd.read_csv(input_path, sep=sep, header=0, index_col=None, error_bad_lines=False)
-        if verbose: print("(load_generic) Loaded dataframe (dim={}) from:\n{}\n".format(df.shape, input_path))
-    else: 
-        df = None
-        if verbose: print("(load_generic) No data found at:\n{}\n".format(input_path))
-
-    return df
-
 def is_valid_loinc(code, token_default='unknown', dehyphenated=True):
     if code.lower() == token_default: 
         return True
@@ -724,6 +715,24 @@ def demo_loinc(**kargs):
 
     pass
 
+def demo_mtrt(): 
+    """
+
+    """
+
+    dehyphenate = True
+    df_mtrt = LoincMTRT.load_table(dehyphenate=dehyphenate) 
+
+    # --- Loinc to MTRT attributes (from Leela)
+    col_mval = LoincMTRT.col_value
+    col_mkey = LoincMTRT.col_key    # loinc codes in the mtrt table
+
+    N0 = df_mtrt.shape[0]
+    Nu = len(df_mtrt[col_mkey].unique())
+    print("(demo) size(df_mtrt): {}, n(unique): {} | E[cols/code]: {}".format(N0, Nu, N0/(Nu+0.0)))
+
+    return
+
 def demo_feature_naming(**kargs):
 
     dtypes = ['test_result_name', 'test_order_name', ]
@@ -742,10 +751,13 @@ def demo_feature_naming(**kargs):
 def test(**kargs): 
 
     # --- LOINC attributes
-    demo_loinc(**kargs)
+    # demo_loinc(**kargs)
+
+    # --- MTRT table (leela)
+    demo_mtrt()
 
     # --- attribute naming 
-    demo_feature_naming()
+    # demo_feature_naming()
 
     return
 

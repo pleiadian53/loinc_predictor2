@@ -53,12 +53,15 @@ def build_tfidf_model(source_values=[], df=None, cols=[], **kargs):
     from gensim.corpora import Dictionary
     from gensim.models import TfidfModel
     from loinc import LoincTable
-    import transfomer as tr
+    import transformer as tr
 
     tStandardize = kargs.get('standardize', True)
     value_default = kargs.get('value_default', "")
     ngram_range = kargs.get('ngram_range', (1, 3))
     tVerify = kargs.get('verify', True)
+    lowercase = kargs.get('lowercase', False)
+    max_features = kargs.get("max_features", 50000)
+    # ... if specified, select only the most frequent ordered by term freq
 
     if len(source_values) == 0:
         assert df is not None 
@@ -84,21 +87,26 @@ def build_tfidf_model(source_values=[], df=None, cols=[], **kargs):
     # tfidf_matrix =  tfdif.fit_transform([content for file, content in corpus])
 
     # -- use sklearn
-    tfidf = TfidfVectorizer(analyzer='word', ngram_range=ngram_range, min_df=1, stop_words=LoincTable.stop_words) # stop_words/'english'
+    tfidf = TfidfVectorizer(analyzer='word', ngram_range=ngram_range, min_df=1, 
+                stop_words=LoincTable.stop_words, max_features=max_features, lowercase=lowercase) # stop_words/'english'
     tfidf = tfidf.fit(source_values)
     
     # -- test
     if tVerify: 
         fset = tfidf.get_feature_names()
+        print("(model) number of features: {}".format(len(fset)))
         Xtr = tfidf.transform(source_values)
+        n_display = 30
 
         analyze = tfidf.build_analyzer()
         np.random.choice(source_values, 1)[0]
-        print("(model) ngram_range: {} => {}".format(ngram_range, analyze(np.random.choice(source_values, 1)[0])))
+        print("(model) ngram_range: {} => {}".format(ngram_range, analyze(np.random.choice(source_values, 1)[0][:100])))
 
         # --- interpretation 
         print("(model) Interpreting the TF-IDF model")
+        tids = set(np.random.choice(range(Xtr.shape[0]), min(Xtr.shape[0], n_display)))
         for i, dvec in enumerate(Xtr):
+            if not i in tids: continue
             # top_tfidf_features(dvec, features=tfidf.get_feature_names(), top_n=10)
             df = top_features_in_doc(Xtr, features=fset, row_id=i, top_n=10)
             print("... doc #{}:\n{}\n".format(i, df.to_string(index=True)))
@@ -109,7 +117,7 @@ def build_tfidf_model(source_values=[], df=None, cols=[], **kargs):
 
     return tfidf
 
-def find_topn_most_similar(): 
+def find_topn_most_similar(code, model): 
     """
 
     Memo
@@ -120,7 +128,6 @@ def find_topn_most_similar():
     2. find similar documents: 
        https://markhneedham.com/blog/2016/07/27/scitkit-learn-tfidf-and-cosine-similarity-for-computer-science-papers/
     """
-
     return
 
 ##########################################################
@@ -183,7 +190,7 @@ def top_features_by_class(Xtr, y, features, min_tfidf=0.1, top_n=25):
 
 def plot_tfidf_classfeats_h(dfs):
     """
-    Plot the data frames returned by the function plot_tfidf_classfeats(). 
+    Plot the data frames returned by the function top_features_by_class(). 
     """
     fig = plt.figure(figsize=(12, 9), facecolor="w")
     x = np.arange(len(dfs[0]))
@@ -256,6 +263,7 @@ def demo_tfidf_transform(**kargs):
     ----
 
     """
+    # from sklearn.feature_extraction.text import TfidfVectorizer
     from sklearn.metrics.pairwise import linear_kernel
     # ... compute dot product
 
@@ -328,6 +336,11 @@ def demo_tfidf_transform(**kargs):
     df = top_mean_features(Xtr, fset, grp_ids=None, min_tfidf=0.1, top_n=10)
     print("... doc(avg):\n{}\n".format(df.to_string(index=True)))
 
+    # --- interface
+    # a. get the scores of individual tokens or n-grams in a given document? 
+    df = pd.DataFrame(Xtr.toarray(), columns = tfidf.get_feature_names())
+    vocab = ['salmon ige ab', 'salmon']
+
 
     return
 
@@ -342,7 +355,6 @@ def demo_tfidf(**kargs):
     CountVectorizer: Transforms text into a sparse matrix of n-gram counts.
     TfidfTransformer: Performs the TF-IDF transformation from a provided matrix of counts.
     """
-
     # import string, sys
     # import math
     # from sklearn.feature_extraction.text import TfidfVectorizer
@@ -402,13 +414,13 @@ def demo_text_model():
 def test(): 
 
     # --- Text features in general 
-    demo_text_model()
+    # demo_text_model()
 
     # --- TF-IDF encoding
     # demo_tfidf()
 
     # --- prediction using the vectors produced by TF-IDF encoding 
-    # demo_tfidf_transform()
+    demo_tfidf_transform()
 
     return
 
