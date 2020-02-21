@@ -26,7 +26,66 @@ Reference
         https://towardsdatascience.com/better-heatmaps-and-correlation-matrix-plots-in-python-41445d0f2bec
 """
 
-def plot_heatmap(S=None, data=None, output_path=None, dpi=300, verbose=True, **kargs): 
+def plot_data_matrix(df, output_path='', dpi=300, **kargs):
+    plt.clf()
+
+    print('(plot_similarity_matrix) dim(df): {d}, columns (n={n}): {cols}'.format(d=df.shape, n=len(df.columns.values), cols=df.columns.values))
+
+    verbose = kargs.get('verbose', 1)
+    dpi = kargs.get('dpi', 300)
+
+    # mask upper triangle? 
+    tMaskUpper = kargs.get('mask_upper', False)
+
+    # range
+    vmin, vmax = kargs.get('vmin', 0.0), kargs.get('vmax', 1.0)  # similarity >= 0
+    annotation = kargs.get('annot', False)
+
+    # Generate a mask for the upper triangle
+    mask = None
+    if tMaskUpper: 
+        mask = np.zeros_like(df, dtype=np.bool)
+        mask[np.triu_indices_from(mask)] = True
+
+    df = pd.melt(df.reset_index(), id_vars='index') # Unpivot the dataframe, so we can get pair of arrays for x and y
+          
+    # e.g.  
+    #        index                   variable     value
+    # 0          0  test_order_name_SHORTNAME  0.000000
+    # 1          1  test_order_name_SHORTNAME  0.047290
+    # 2          2  test_order_name_SHORTNAME  0.000000
+    # 3          3  test_order_name_SHORTNAME  0.092474
+    # 4          4  test_order_name_SHORTNAME  0.000000
+    # ...      ...                        ...       ...
+
+    df.columns = ['y', 'x', 'value']
+    # set variabes in the x axis
+    #     index    in the y axis
+
+    ax = heatmap(
+            x=df['x'],
+            y=df['y'],
+            size=df['value'].abs(),
+            color=df['value'], 
+            
+            # vmin=vmin, vmax=vmax, center=0,
+            # annot=annotation,
+
+            # --- other options 
+            # color_range=[-1, 1],
+            # palette
+            # size 
+            # size_range
+    )
+
+    if not output_path: output_path = os.path.join('plot', "data_matrix.pdf")
+    assert os.path.exists(os.path.dirname(output_path)), "Invalid path: {}".format(os.path.dirname(output_path))
+    if verbose: print('(plot_data_matrix) Saving heatmap at: {path}'.format(path=output_path))
+    saveFig(plt, output_path, dpi=dpi)
+
+    return 
+
+def plot_similarity_matrix(S=None, data=None, output_path='', **kargs): 
     plt.clf()
 
     if data is not None: 
@@ -35,8 +94,11 @@ def plot_heatmap(S=None, data=None, output_path=None, dpi=300, verbose=True, **k
         
     elif S is not None: 
         assert isinstance(S, DataFrame)
-    print('(plot_heatmap) columns (n={n}): {cols}'.format(n=len(data.columns.values), cols=data.columns.values))
+    print('(plot_similarity_matrix) columns (n={n}): {cols}'.format(n=len(data.columns.values), cols=data.columns.values))
 
+    verbose = kargs.get('verbose', 1)
+    dpi = kargs.get('dpi', 300)
+      
     # mask upper triangle? 
     tMaskUpper = kargs.get('mask_upper', False)
 
@@ -73,20 +135,32 @@ def plot_heatmap(S=None, data=None, output_path=None, dpi=300, verbose=True, **k
 
     S = pd.melt(S.reset_index(), id_vars='index') # Unpivot the dataframe, so we can get pair of arrays for x and y
     S.columns = ['x', 'y', 'value']
+
     ax = heatmap(
             x=S['x'],
             y=S['y'],
             size=S['value'].abs(),
             color=S['value'], 
-            # color_range=[-1, 1],
+            
             # vmin=vmin, vmax=vmax, center=0,
             # annot=annotation,
+
+            # --- other options 
+            # color_range=[-1, 1],
+            # palette
+            # size 
+            # size_range
     )
 
-    if verbose: print('(plot_heatmap) Saving heatmap at: {path}'.format(path=output_path))
+    if not output_path: output_path = os.path.join('plot', "sim_matrix.pdf")
+    assert os.path.exists(os.path.dirname(output_path)), "Invalid path: {}".format(os.path.dirname(output_path))
+    if verbose: print('(plot_similarity_matrix) Saving heatmap at: {path}'.format(path=output_path))
     saveFig(plt, output_path, dpi=dpi)
 
     return 
+
+# --- alias
+plot_heatmap = plot_similarity_matrix
 
 def heatmap(x, y, **kwargs):
     if 'color' in kwargs:
@@ -316,27 +390,55 @@ def t_cluster():
     parentdir = os.path.dirname(os.getcwd())
     testdir = os.path.join(parentdir, 'test')  # e.g. /Users/<user>/work/data
 
-    fpath = os.path.join(testdir, 'heatmap-sim.png') 
+    fpath = os.path.join(testdir, 'heatmap-cluster-sim.png') 
     # ... tif may not be supported (Format 'tif' is not supported (supported formats: eps, pdf, pgf, png, ps, raw, rgba, svg, svgz))
 
     plot_heatmap(data=df, output_path=fpath)
 
     return
     
-def t_heatmap(corr, **kargs):
-    
+def t_heatmap(corr=None, **kargs):
+    import seaborn as sns 
+
+    plt.clf()
+    mode = 'conventional' # 'conventional', 'enchanced'
 
     # corr: similarity_dataframe
+    if corr is None: 
+        data = pd.read_csv('https://raw.githubusercontent.com/drazenz/heatmap/master/autos.clean.csv')
+        corr = data.corr()
 
-    corr = pd.melt(corr.reset_index(), id_vars='index') # Unpivot the dataframe, so we can get pair of arrays for x and y
-    corr.columns = ['x', 'y', 'value']
-    heatmap(
-        x=corr['x'],
-        y=corr['y'],
-        size=corr['value'].abs()
-    ) 
+    if mode.startswith('conv'): 
+        
+
+        # --- Conventional heatmap
+        ax = sns.heatmap(
+            corr, 
+            vmin=-1, vmax=1, center=0,
+            cmap=sns.diverging_palette(20, 220, n=200),
+            square=True
+        )
+        ax.set_xticklabels(
+            ax.get_xticklabels(),
+            rotation=45,
+            horizontalalignment='right'
+        );
+    else: 
+        corr = pd.melt(corr.reset_index(), id_vars='index') # Unpivot the dataframe, so we can get pair of arrays for x and y
+        corr.columns = ['x', 'y', 'value']
+        heatmap(
+            x=corr['x'],
+            y=corr['y'],
+            size=corr['value'].abs()
+        ) 
+
+    parentdir = os.path.dirname(os.getcwd())
+    testdir = os.path.join(parentdir, 'test')  # e.g. /Users/<user>/work/data
+    output_path = os.path.join(testdir, 'heatmap-test.png') 
+    saveFig(plt, output_path, dpi=200)
 
     return
+
 
 def test(): 
     import pandas as pd 

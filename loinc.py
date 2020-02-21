@@ -30,6 +30,15 @@ class LoincTable(object):
     cols_6p = six_parts = p6 = ['COMPONENT', 'PROPERTY', 'TIME_ASPCT', 'SYSTEM', 'SCALE_TYP', 'METHOD_TYP', ]  # ['CLASS']
     text_cols = ['LONG_COMMON_NAME', 'SHORTNAME', 'RELATEDNAMES2', 'STATUS_TEXT'] + cols_6p
 
+    cols_abbrev = {"LONG_COMMON_NAME": "LN",
+                   "SHORTNAME": "SN", 
+                   "COMPONENT": "COMP",
+                   "PROPERTY": "PROP", 
+                   "TIME_ASPCT": "TIME",
+                   "SYSTEM": "SYS", 
+                   "SCALE_TYP": "SCALE", 
+                   "METHOD_TYP": "METHOD"}
+
     stop_words = ["IN", "FROM", "ON", "OR", "OF", "BY", "AND", "&", "TO", "BY", "", " "]
 
     @staticmethod

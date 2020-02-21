@@ -323,6 +323,59 @@ def group_by(df, cols=['test_result_code', 'test_result_name',], verbose=1, n_sa
     
     return adict
 
+def toXY(df, cols_x=[], cols_y=[], untracked=[], **kargs): 
+    
+    verbose = kargs.get('verbose', 1)
+    
+    X = y = None
+    if len(untracked) > 0: 
+        df = df.drop(untracked, axis=1)
+
+    if len(cols_x) > 0: 
+        X = df[cols_x].values
+        
+        cols_y = list(df.drop(cols_x, axis=1).columns)
+        y = df[cols_y].values
+
+    else: 
+        assert len(cols_y) > 0 
+        cols_x = list(df.drop(cols_y, axis=1).columns)
+        X = df[cols_x].values
+        y = df[cols_y].values
+
+    # optional operations
+    scaler = kargs.get('scaler', None)
+    if scaler is not None: 
+        if verbose: print("(toXY) Scaling X using method={}".format(scaler))
+        from sklearn import preprocessing
+        if scaler.startswith('standard'): 
+            std_scale = preprocessing.StandardScaler().fit(X)
+            X = std_scale.transform(X)
+        elif scaler.startswith(('normalize', 'minmax')): 
+            minmax_scale = preprocessing.MinMaxScaler().fit(X)
+            X = minmax_scale.transform(X)
+    
+    # return (X, y, z, cols_x, cols_y)
+    return (X, y, cols_x, cols_y)
+
+def down_sample(df, col_label='label', n_samples=-1):
+    labelCounts = dict(df[col_label].value_counts())
+    labelSorted = sorted(labelCounts, key=labelCounts.__getitem__, reverse=True)
+    max_label, min_label = labelSorted[0], labelSorted[-1]
+    max_count, min_count = labelCounts[max_label], labelCounts[min_label]
+
+    df_max = df.loc[df[col_label]==max_label]
+    df_min = df.loc[df[col_label]==min_label]
+
+    n_samples = min(n_samples, min_count) if n_samples > 0 else min_count
+
+    # downsample majority classs
+    df_max = df_max.sample(n=n_samples)
+
+    if n_samples < df_min.shape[0]: 
+        df_min = df_min.sample(n=n_samples)
+    return pd.concat([df_min, df_max], ignore_index=True)
+
 def map_group_to_label(df, cols=['test_result_code', 'test_result_name',], verbose=1, n_samples=-1):
     return
 

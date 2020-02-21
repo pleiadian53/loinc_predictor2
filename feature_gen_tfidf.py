@@ -1,7 +1,7 @@
 import pandas as pd 
 import numpy as np
 from pandas import DataFrame, Series
-import os, re, sys
+import os, re, sys, time
 import random
 from tabulate import tabulate
 from collections import defaultdict, Counter
@@ -1624,12 +1624,12 @@ def demo_create_tfidf_vars(**kargs):
 
     parentdir = os.path.dirname(os.getcwd())
     testdir = os.path.join(parentdir, 'test')  # e.g. /Users/<user>/work/data
-    output_file = ''
+    output_file = f'{subject}.csv'
     output_path = os.path.join(testdir, output_file)
 
     # Output
     # --------------------------------------------------------
-    df_match.to_csv(f'{subject}.csv', index=False, header=True)
+    df_match.to_csv(output_path, index=False, header=True)
     # --------------------------------------------------------
 
     tabulate(df_match.sample(n=n_display), headers='keys', tablefmt='psql')
@@ -1638,13 +1638,277 @@ def demo_create_tfidf_vars(**kargs):
     
     fpath = os.path.join(testdir, f'heatmap-{subject}.png') 
     # ... tif may not be supported (Format 'tif' is not supported (supported formats: eps, pdf, pgf, png, ps, raw, rgba, svg, svgz))
-    plot_heatmap(data=df_match, output_path=fpath)
+    # plot_heatmap(data=df_match, output_path=fpath)
 
     # --- matching scores 
     # matching_score()
 
     return
+
+def demo_create_tfidf_vars_part2(**kargs): 
+    """
+
+    Memo
+    ----
+   
+    1. distance metric (correlation, cocine, euclidean, ...)
+
+       https://docs.scipy.org/doc/scipy/reference/generated/scipy.spatial.distance.pdist.html
+
+    2. linkage method 
+
+       https://docs.scipy.org/doc/scipy/reference/generated/scipy.cluster.hierarchy.linkage.html
+
+       + distance between two clusetrs d(s, t)
+       + a distance matrix is maintained at earch iteration
+
+    3. In cluster analysis (and PCA), var standardization seems better 
+       https://sebastianraschka.com/Articles/2014_about_feature_scaling.html#z-score-standardization-or-min-max-scaling
+
+       + clustermap, running hierarchical clustering over heatmap 
+         https://seaborn.pydata.org/generated/seaborn.clustermap.html
+
+    4. coloring 
+
+       + heatmap: https://seaborn.pydata.org/generated/seaborn.heatmap.html
+       + color palettes: https://seaborn.pydata.org/tutorial/color_palettes.html
+
+       + color picker
+         https://htmlcolorcodes.com/color-picker/
+
+    5. Axis labels 
+       https://www.drawingfromdata.com/how-to-rotate-axis-labels-in-seaborn-and-matplotlib
+
+       To rotate labels:
+           need to reference the Axes from the underlying Heatmap and rotate these
+
+           e.g. cg = sns.clustermap(df, metric="correlation")
+                plt.setp(cg.ax_heatmap.yaxis.get_majorticklabels(), rotation=0)
+
+    """
+    def relabel(df, target_cols=[]):
+        if not target_cols: target_cols = df.columns
+
+        # remove prefix
+        new_cols = []
+        for i, col in enumerate(target_cols): 
+            new_cols.append(col.replace("test_", ""))
+        target_cols = new_cols
+
+        new_cols = []
+        loinc_abbrev = LoincTable.cols_abbrev 
+        for i, col in enumerate(target_cols):
+            tFoundMatch = False
+            for name, abbrev in loinc_abbrev.items(): 
+                if col.find(name) >= 0: 
+                    new_cols.append(col.replace(name, abbrev))
+                    print("... {} -> {}".format(col, col.replace(name, abbrev)))
+                    tFoundMatch = True
+                    break
+            if not tFoundMatch: 
+                new_cols.append(col) # new column is the old column
+        target_cols = new_cols
         
+        return df.rename(columns=dict(zip(df.columns.values, target_cols)))
+
+    import seaborn as sns
+    import matplotlib
+    matplotlib.use('Agg') # use a non-interactive backend such as Agg (for PNGs), PDF, SVG or PS.
+    import matplotlib.pyplot as plt
+
+    # select plotting style; must be called prior to pyplot
+    plt.style.use('seaborn')  # values: {'seaborn', 'ggplot', }  
+    from utils_plot import saveFig
+    # from sklearn import preprocessing
+    from sklearn.decomposition import PCA
+    from sklearn.manifold import TSNE
+    from data_processor import toXY, down_sample
+    from feature_analyzer import plot_heatmap, plot_data_matrix
+
+    plt.clf()
+    
+    cohort = kargs.get('cohort', 'hepatitis-c')
+    tStandardize = False
+
+    # ---------------------------------------------
+    # sns.set_color_codes("pastel")
+    # sns.set(color_codes=True)
+    n_colors = 256 # Use 256 colors for the diverging color palette
+    # palette = sns.diverging_palette(20, 220, n=n_colors) # Create the palette
+    palette = sns.color_palette("coolwarm", 10)
+    # sns.palplot(sns.color_palette("coolwarm", 7))
+    # sns.palplot(palette)
+    # ---------------------------------------------
+    n_display = 10
+    subject = 'tfidf_vars'
+
+    cols_y = ['label', ]
+    cols_untracked = []
+    # ---------------------------------------------
+
+    # read the feature vectors
+    parentdir = os.path.dirname(os.getcwd())
+    testdir = os.path.join(parentdir, 'test')  # e.g. /Users/<user>/work/data
+    input_file = f'{subject}.csv'
+    input_path = os.path.join(testdir, input_file)
+    df_match = pd.read_csv(input_path, sep=",", header=0, index_col=None, error_bad_lines=False)
+    # ---------------------------------------------
+
+    # limit sample size to unclutter plot 
+    n_samples = 50
+    df_match = down_sample(df_match, col_label='label', n_samples=n_samples)
+    df_match = df_match.sort_values(by=['label', ], ascending=True)
+    df_match = relabel(df_match)
+    # ---------------------------------------------
+
+    df_pos = df_match[df_match['label']==1]
+    df_neg = df_match[df_match['label']==0]
+
+    # -- perturb the negative examples by a small random noise
+    # ep = np.min(df_pos.values[df_pos.values > 0])
+    # df_neg += np.random.uniform(ep/100, ep/10, df_neg.shape)
+    # print("... ep: {} => perturbed df_neg:\n{}\n".format(ep, df_neg.head(10)))
+    # df_match = pd.concat([df_pos, df_neg])
+
+    # ---------------------------------------------
+    # labels = df_match.pop('label')  # this is an 'inplace' operation
+    labels = df_match['label']  # labels: a Series
+    n_labels = np.unique(labels.values)
+    # ---------------------------------------------
+
+    lut = {1: "#3933FF", 0: "#FF3368"} # dict(zip(labels.unique(), "rb"))
+    # positive (blue): #3933FF, #3358FF, #e74c3c
+    # negative (red) : #FF3368,  #3498db 
+    print("... lut: {}".format(lut))
+    row_colors = labels.map(lut)
+
+    # detect zero vectors
+    df_zeros = df_match.loc[(df_match.T == 0).all()]
+    print("... found n={} zero vectors (which cannot be normalized; troubled in computing cosine, correlation)".format(df_zeros.shape[0]))
+    df_pos_zeros = df_pos.loc[(df_pos.T == 0).all()]
+    df_neg_zeros = df_neg.loc[(df_neg.T == 0).all()]
+    print("... n(pos): {}, n(pos, 0): {}, ratio: {}".format(df_pos.shape[0], df_pos_zeros.shape[0], df_pos_zeros.shape[0]/df_pos.shape[0]))
+    print("... n(neg): {}, n(neg, 0): {}, ratio: {}".format(df_neg.shape[0], df_neg_zeros.shape[0], df_neg_zeros.shape[0]/df_neg.shape[0]))
+
+    # standardize the data
+    print("... col(df_match): {}".format(df_match.columns.values))
+
+    if tStandardize:
+        X, y, fset, lset = toXY(df_match, cols_y=cols_y, scaler='standardize')
+        print("... feature set: {}".format(fset))
+
+        # df_match = DataFrame(np.hstack([X, y, z]), columns=fset+lset+cols_untracked)
+        dfX = DataFrame(X, columns=fset)
+        # ... don't include y here
+
+        df_zeros = dfX.loc[(dfX.T == 0).all()]
+        print("... After standardization, found n={} zero vectors".format(df_zeros.shape[0]))
+    else: 
+        dfX = df_match.drop(cols_y, axis=1)
+
+    highlight("(demo) 1. Plotting dendrogram (on top of heatmap) ...", symbol='#')
+
+    # Normalize the data within the rows via z_score
+    sys.setrecursionlimit(10000)
+    g = sns.clustermap(dfX, figsize=(15, 24.27), z_score=1, row_colors=row_colors, cmap='vlag', metric='cosine', method='complete')  
+    # ... need to pass dataframe dfX instead of X! 
+
+    # g.set_xticklabels(g.get_xticklabels(), rotation=45)
+    # print(dir(g.ax_heatmap))
+    plt.setp(g.ax_heatmap.xaxis.get_majorticklabels(), rotation=45)
+    # plt.setp(g.ax_heatmap.secondary_yaxis(), rotation=45)
+    g.ax_heatmap.set_xticklabels(g.ax_heatmap.get_xmajorticklabels(), fontsize=16, fontweight='light')
+    # ... horizontalalignment='right' shifts labels to the left
+    
+    # colors:  cmap="vlag", cmap="mako", cmap=palette
+    # normalization: z_score, stndardize_scale
+
+    output_path = os.path.join(testdir, f'heatmap-tfidf-{cohort}.png')
+    g.savefig(output_path, format='pdf', dpi=300, bbox_inches='tight') 
+    # saveFig(plt, output_path, dpi=300)
+
+    ################################################
+    df_match = pd.read_csv(input_path, sep=",", header=0, index_col=None, error_bad_lines=False)
+    n_samples = 50
+    df_match = down_sample(df_match, col_label='label', n_samples=n_samples)
+    df_match = relabel(df_match)
+    df_pos = df_match[df_match['label']==1]
+    df_neg = df_match[df_match['label']==0]
+    # ... no X scaling
+
+    # --- Enhanced heatmap 
+    highlight("(demo) 2. Visualize feature values > (+) examples should higher feature values, while (-) have low to zero values")
+    output_path = os.path.join(testdir, f'tfidf-vars-pos-match-{cohort}.png')
+    plot_data_matrix(df_pos, output_path=output_path, dpi=300)
+
+    output_path = os.path.join(testdir, f'tfidf-vars-neg-match-{cohort}.png')
+    plot_data_matrix(df_neg, output_path=output_path, dpi=300)
+
+    #################################################
+    # --- PCA plot 
+
+    plt.clf()
+    highlight("(demo) 3. PCA plot", symbol='#')
+    
+    # X = df_match.drop(cols_y+untracked, axis=1).values
+
+    # read in the data again 
+    df_match = pd.read_csv(input_path, sep=",", header=0, index_col=None, error_bad_lines=False)
+    df_match = down_sample(df_match, col_label='label')
+    X, y, fset, lset = toXY(df_match, cols_y=cols_y, scaler='standardize')
+
+    # print("... dim(X): {} => X=\n{}\n".format(X.shape, X))
+    pca = PCA(n_components=2)
+    pca_result = pca.fit_transform(X)
+    df_match['pca1'] = pca_result[:,0]
+    df_match['pca2'] = pca_result[:,1] 
+
+    np.random.seed(42)
+    rndperm = np.random.permutation(df_match.shape[0])
+
+    n_colors = 2  # len(labels)
+    plt.figure(figsize=(16,10))
+    sns.scatterplot(
+        x="pca1", y="pca2",
+        hue="label",
+        palette=sns.color_palette("hls", n_colors),
+        data=df_match.loc[rndperm,:],   # rndperm is redundant here
+        legend="full",
+        alpha=0.3
+    )
+
+    output_path = os.path.join(testdir, f'PCA-tfidf-{cohort}.png') 
+    saveFig(plt, output_path, dpi=300)
+
+    #################################################
+    # --- tSNE Plot
+
+    highlight("(demo) 4. t-SNE plot", symbol='#')
+    plt.clf()
+    time_start = time.time()
+    tsne = TSNE(n_components=2, verbose=1, perplexity=15, n_iter=300)
+    tsne_results = tsne.fit_transform(X)
+    print('t-SNE done! Time elapsed: {} seconds'.format(time.time()-time_start))
+
+    df_match['tsne1'] = tsne_results[:,0]
+    df_match['tsne2'] = tsne_results[:,1]
+    plt.figure(figsize=(16,10))
+
+    # note: requires seaborn-0.9.0
+    sns.scatterplot(
+        x="tsne1", y="tsne2",
+        hue="label",
+        palette=sns.color_palette("hls", n_colors),
+        data=df_match,
+        legend="full",
+        alpha=0.3
+    )
+
+    output_path = os.path.join(testdir, f'tSNE-tfidf-{cohort}.png') 
+    saveFig(plt, output_path, dpi=300)
+        
+    return
+
 def demo_experta(**kargs):
     from random import choice
     # from experta import *
@@ -1710,7 +1974,8 @@ def test(**kargs):
     # demo_corpus(mode='code')
 
     #--- Text feature generation
-    demo_create_tfidf_vars()
+    # demo_create_tfidf_vars()
+    demo_create_tfidf_vars_part2()
 
     #--- Basic LOINC Prediction
     # demo_predict()
