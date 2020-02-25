@@ -72,7 +72,7 @@ def build_tfidf_model(source_values=[], df=None, cols=[], **kargs):
             print("(build_tfidf_model) Warning: Building corpus from dataframe, you may need to set standardize to True!")
 
     if tStandardize: 
-        source_values = preproces_source_values(source_value=source_values, value_default=value_default)
+        source_values = preprocess_text_simple(source_value=source_values, value_default=value_default)
 
     # source_token_lists = [source_text.split() for source_text in source_values]
     
@@ -214,7 +214,7 @@ def plot_tfidf_classfeats_h(dfs):
 ##########################################################
 
 def demo_create_tfidf_vars(save=True):
-    from transformer import preproces_source_values
+    from transformer import preprocess_text_simple
     from analyzer import label_by_performance, col_values_by_codes, load_src_data
 
     cohort = "hepatitis-c"
@@ -248,7 +248,7 @@ def demo_create_tfidf_vars(save=True):
         # dft = dft.drop_duplicates().reset_index(drop=True)
 
         # --- pass only source valus
-        dfp = preproces_source_values(dfp, col=col, value_default=value_default)
+        dfp = preprocess_text_simple(dfp, col=col, value_default=value_default)
 
         
     uniq_src_vals = dfp[col].unique()

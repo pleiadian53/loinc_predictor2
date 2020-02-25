@@ -8,6 +8,7 @@ Reference
                  
 """
 import os, time
+import random
 import numpy as np
 import re, collections, glob, random
 from numpy import argmax, argmin, argsort, corrcoef, mean, nanmax, sqrt, triu_indices_from, where
@@ -52,6 +53,17 @@ def multiclass_roc_auc_score(y_test, y_pred, average="macro"):
     y_test = lb.transform(y_test)
     y_pred = lb.transform(y_pred)
     return roc_auc_score(y_test, y_pred, average=average)
+
+def ordered_sampled_without_replacement(seq, k):
+    if not (0 <= k <=len(seq)):
+        raise ValueError('Required that 0 <= sample_size <= population_size')
+
+    numbersPicked = 0
+    for i,number in enumerate(seq):
+        prob = (k-numbersPicked)/(len(seq)-i)
+        if random.random() < prob:
+            yield number
+            numbersPicked += 1
 
 def five_number(x): 
     # five number summary of a sequence x

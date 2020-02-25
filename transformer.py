@@ -96,37 +96,14 @@ def remove_null_like_values(source_values, extended='%'):
         # if removing punctuations result in empty string, then the value may carry no information (e.g. %)
     return new_values
 
-def preproces_source_values(df=None, col='', source_values=[], value_default=""): 
+def preprocess_text_simple(df=None, col='', source_values=[], value_default=""): 
     """
     Assuming that the input source values are strings, this function 
     converts all NaNs to empty strings, numeric values to their string counterparts, 
     and remove redundant spaces in the front and back of the source values.  
 
     """
-    # import pandas as pd
-    
-    hasValidDf = df is not None and col in df.columns
-    if isinstance(source_values, str): source_values = [source_values, ]
-    if len(source_values) == 0: # unique_tests
-        assert hasValidDf, "Neither the source values nor training data were given!"
-        source_values = df[col].values 
-        
-    source_values_processed = []
-    n_null = n_numeric = 0
-    for source_value in source_values: 
-        if pd.isna(source_value): 
-            source_values_processed.append(value_default)
-            n_null += 1
-        elif isinstance(source_value, (int, float, )): 
-            n_numeric += 1
-            source_values_processed.append(str(source_value))
-        else: 
-            source_values_processed.append( source_value.strip() )
-
-    if hasValidDf: 
-        df[col] = source_values_processed
-        return df 
-    return source_values_processed
+    return text_processor.preprocess_text_simple(df=df, col=col, source_values=source_values, value_default=value_default)
 
 def remove_duplicates(s, sep=" "):
     tokens = s.split(sep)

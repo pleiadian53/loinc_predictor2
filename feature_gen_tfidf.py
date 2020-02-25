@@ -15,12 +15,13 @@ from loinc import LoincTable, LoincTSet
 from loinc_mtrt import LoincMTRT
 import loinc_mtrt as lmt
 
-from CleanTextData import standardize 
-
 from utils_sys import highlight
 from language_model import build_tfidf_model
 import config
-import common
+
+import common, text_processor
+from text_processor import process_text
+from CleanTextData import standardize 
 
 # from utils_plot import saveFig # contains "matplotlib.use('Agg')" which needs to be called before pyplot 
 # from matplotlib import pyplot as plt
@@ -150,315 +151,8 @@ def display(x, n_delimit=80):
     return msg
 
 def extract_slots(df=None, col='', source_values=[], **kargs):
-
-    verbose = kargs.get('verbose', 0)
-    docType = kargs.get('doc_type', "long name")
-    remove_slot = kargs.get('remove_slot', False) # if True, remove slot from text
-    save = kargs.get('save', False)
-
-    if len(source_values) > 0: 
-        if not col: col = 'processed'
-        df = DataFrame(source_values, columns=[col, ])
-    else: 
-        assert df is not None, "Both input dataframe (df) and source values were not given!"
-        source_values = df[col].values
-
-    # precondition
-    Nvar = df.shape[1]
-
-    # brackets
-    if verbose: print("(process_text_col) Extracting measurement units (i.e. [...]) ... ")
-    cols_target = [col, "unit"]
-    col_unit = 'unit'
-    cols_derived = ['unit', ]
-    bracketed = []
-    token_default = ""
-    null_rows = []
-    # n_malformed = 0
-    malformed = []
-    for r, doc in enumerate(source_values): 
-        if pd.isna(doc) or len(str(doc)) == 0: 
-            null_rows.append(r)
-            bracketed.append(token_default)
-            continue
-
-        b, e = doc.find("["), doc.find("]")
-        if b > 0: 
-            if not e > b: 
-                if verbose: print("(process_text_col) Weird doc (multiple [])? {}".format(doc))
-                # n_malformed += 1
-                malformed.append(doc)
-                bracketed.append(token_default)
-                continue
-
-            bracketed.append( re.search(r'\[(.*?)\]',doc).group(1).strip() )   # use .*? for non-greedy match
-        else: 
-            bracketed.append(token_default)
-    null_rows = set(null_rows)
-
-    
-    # --------------------------------------
-    # derived attributes
-    df[col_unit] = bracketed
-    # df[col_unit] = df[col].apply(re.search(r'\[(.*?)\]',s).group(1))
-    # --------------------------------------
-
-    if remove_slot: 
-
-        # [test]
-        target_index = []
-        if verbose: 
-            dft = df[df[col].str.contains("\[.*?\]")]
-            target_index = dft.index
-
-            print("(process_text_col) Malformed []-terms (n={}):\n{}\n".format(len(malformed), display(malformed)))
-            print("(process_text_col) After extracting unit (doc type: {}) | n(has []):{}, n(malformed): {} ...\n{}\n".format(docType, 
-                    dft.shape[0], len(malformed),
-                        tabulate(dft[cols_target].head(20), headers='keys', tablefmt='psql')))
-
-        df[col] = df[col].str.replace("\[.*?\]", '')
-
-        if verbose and len(target_index) > 0: 
-            print("(process_text_col) After removing brackets:\n{}\n".format(tabulate(df.iloc[target_index][cols_target].head(20), headers='keys', tablefmt='psql')))
-
-    ########################################################
-
-    # parenthesis
-    abbreviations = []
-    compounds = []
-    new_docs = []
-    col_abbrev = 'abbrev'
-    col_comp = 'compound'
-    cols_derived = cols_derived + [col_abbrev, col_comp, ]
-
-    ########################################################
-    p_abbrev = re.compile(r"(?P<compound>[-+a-zA-Z0-9,']+)\s+\((?P<abbrev>.*?)\)")  # p_context
-    # ... capture 2,2',3,4,4',5-Hexachlorobiphenyl (PCB)
-    # ... cannot capture Bromocresol green (BCG)
-
-    p_aka = re.compile(r"(?P<compound>[-+a-zA-Z0-9,']+)/(?P<abbrev>[-a-zA-Z0-9,']+)")
-    # ... 3-Hydroxyisobutyrate/Creatinine
-
-    p_abbrev2 = re.compile(r"(?P<compound>([-+a-zA-Z0-9,']+)(\s+[-a-zA-Z0-9,']+)*)\s+\((?P<abbrev>.*?)\)")
-    # ... von Willebrand factor (vWf) Ag actual/normal in Platelet poor plasma by Immunoassay
-
-    p_by = re.compile(r".*by\s+(?P<compound>([-+a-zA-Z0-9,']+)(\s+[-a-zA-Z0-9,']+)*)\s+\((?P<abbrev>.*?)\)")
-    p_supplement = p_ps = re.compile(r".*--\s*(?P<ps>([-+a-zA-Z0-9,']+)(\s+[-a-zA-Z0-9,']+)*)")
-    p_context_by = re.compile(r"by\s+(?P<compound>([-+a-zA-Z0-9,']+)(\s+[-a-zA-Z0-9,']+)*)\s+\((?P<abbrev>.*?)\)")
-    ########################################################
-    
-    if verbose: print("(process_text_col) Extracting compounds and their abbreviations ... ")
-    cols_target = [col, "compound", "abbrev"]
-    token_default = ""
-    n_null = n_malformed = 0
-    malformed = []
-    for r, doc in enumerate(source_values): 
-        # if r in null_rows: 
-        #     abbreviations.append(token_default)
-        #     compounds.append(token_default)
-        #     continue
-
-        b, e = doc.find("("), doc.find(")")
-        tHasMatch = False
-        if b > 0: 
-            if not (e > b): 
-                if verbose: print("(process_text_col) Weird doc (multiple parens)? {}".format(doc))
-                # e.g. MTRT: Functional Assessment of Incontinence Therapy - Fecal Questionnaire - version 4 ( [FACIT]
-                #      missing closing paran
-                abbreviations.append(token_default)
-                compounds.append(token_default)
-                # n_malformed += 1
-                malformed.append(doc)
-                new_docs.append(doc)
-                continue
-
-            m = p_abbrev.match(doc)
-            if m: 
-                abbreviations.append(m.group('abbrev').strip())
-                compounds.append(m.group('compound').strip())
-                tHasMatch = True
-            else:
-                # long name followed by keyword "by"
-                m = p_by.match(doc)
-                # e.g. fusion transcript  in Blood or Tissue by Fluorescent in situ hybridization (FISH) Narrative
-                # ~> Fluorescent in situ hybridization (FISH)
-                if m: 
-                    abbreviations.append(split_and_strip(m.group('abbrev'))) # m.group('abbrev').strip()
-                    compounds.append(split_and_strip(m.group('compound'))) # m.group('compound').strip())
-                    tHasMatch = True
-                else: 
-                    m = p_abbrev2.match(doc)
-                    if m: 
-                        abbreviations.append(split_and_strip(m.group('abbrev')))
-                        compounds.append(split_and_strip(m.group('compound')))
-                        tHasMatch = True
-
-            if not tHasMatch: 
-                # not matched in the beginning
-                # e.g. 14-3-3 protein [Presence] in Cerebral spinal fluid by Immunoblot (IB)
-                m = p_context_by.search(doc)
-                if m: 
-                    abbreviations.append(split_and_strip(m.group('abbrev')))
-                    compounds.append(split_and_strip(m.group('compound')))
-                    tHasMatch = True
-
-        ########################
-        if not tHasMatch: 
-            d = doc.find("/")
-            if d > 0: 
-                m = p_aka.match(doc)
-                if m: 
-                    abbreviations.append(m.group('abbrev').strip())
-                    compounds.append(m.group('compound').strip())
-                    tHasMatch = True
-
-        ########################
-        if not tHasMatch: 
-            abbreviations.append(token_default)
-            compounds.append(token_default)
-
-            # doc: no change
-        else:
-            # [test]
-            if remove_slot: 
-                doc = re.sub('\(.*?\)', '', doc)
- 
-                b, e = doc.find("("), doc.find(")")
-                assert b < 0 or e < 0, "Multiple parens? {}".format(doc)
-
-        new_docs.append(doc)
-            
-    # --------------------------------------
-    # derived attributes
-    df[col_comp] = compounds
-    df[col_abbrev] = abbreviations
-    # --------------------------------------
-
-    if remove_slot:
-
-        # [test]
-        target_index = []
-        if verbose: 
-            dft = df[df[col].str.contains("\(.*?\)")]
-            target_index = dft.index
-            print("(process_text_col Malformed ()-terms (n={}):\n{}\n".format(len(malformed), display(malformed)))
-            print("(process_text_col) After extracting 'compound' & 'abbreviation' (doc type: {}) | n(has_paran):{}, n(malformed):{} ...\n{}\n".format(
-                docType, dft.shape[0], len(malformed),
-                    tabulate(dft[cols_target][[col, col_abbrev]].head(200), headers='keys', tablefmt='psql')))
-
-        df[col] = df[col].str.replace("\(.*?\)", '')
-
-        if verbose > 1 and len(target_index) > 0: 
-            print("(process_text_col) After removing parens:\n{}\n".format(tabulate(df.iloc[target_index][cols_target].head(100), headers='keys', tablefmt='psql')))
-    # -------------------------------------------------------------        
-    # complex cases: 
-    #    Hepatitis B virus DNA [log units/volume] (viral load) in Serum or Plasma by NAA with probe detection
-
-    # df[col] = new_docs
-    ########################################################
-
-    if verbose: print("(process_text_col) Extracting Postscript ... ")
-    cols_target = [col, "note"]
-    col_note = 'note'
-    cols_derived = cols_derived + [col_note, ]
-    token_default = ""
-    notes = []
-    for r, doc in enumerate(source_values): 
-        # if r in null_rows: 
-        #     notes.append(token_default)
-        #     continue
-
-        m = p_ps.match(doc)
-        if m: 
-            notes.append(split_and_strip(m.group('ps')))
-        else: 
-            notes.append(token_default)
-
-    # --------------------------------------
-    df[col_note] = notes
-    # --------------------------------------
-    if remove_slot: 
-        df[col] = df[col].str.replace("--", " ")
-
-    if verbose > 1: 
-        dft = df[df[col].str.contains("--.*")]
-        print("(process_text_col) After extracting additional info (PS) [doc type: {}] | n(has PS): {} ... \n{}\n".format(
-            docType, dft.shape[0], tabulate(dft[cols_target].head(50), headers='keys', tablefmt='psql')))
-
-    assert df.shape[1] == Nv + 4
-
-    if save: 
-        # output_file=kargs.get('output_file')
-        LoincMTRT.save_derived_loinc_to_mtrt(df)
-
-    return df
-
-def process_text_col(df=None, col='', source_values=[], 
-                   add_derived=True, remove_slot=False, clean=True, standardized=True, save=False, 
-                   transformed_vars_only=True, **kargs): 
-    """
-    Parse long strings, such as LOINC's long name field and MTRT, which typically serve as "tags"
-
-    Operations: 1. preprocess the input/source values so that each value is guranteed to be in string format (e.g. NaN turned into
-                   empty string, floats and ints into their string forms)
-                2. Simple slot filling identified by brackets, parens, dashes, etc.
-                3. text cleaning by removing punctuations
-
-    Note that the name of the slots/derived attributes may not be always what they meant to be used. 
-    e.g. 'unit' typically refers to measurement units but sometimes other kinds of values could be enclosed within brackets as well. 
-
-    """
-    def split_and_strip(s): 
-        return ' '.join([str(e).strip() for e in s.split()])
-    
-    from transformer import preproces_source_values
-    from CleanTextData import clean_term, standardize
-
-    # for debugging and testing only
-    verbose = kargs.get('verbose', 0)
-    docType = kargs.get('doc_type', "long name")
-    value_default = kargs.get("value_default", "")   # default value for NaN/Null
-    return_dataframe = False
-    
-    if not isinstance(source_values, (list, np.ndarray)): source_values = [source_values, ]
-    if len(source_values) > 0: 
-        return_dataframe = False
-    else: 
-        assert df is not None, "Both the dataframe (df) and source values were not given!"
-        source_values = df[col].values
-        return_dataframe = True
-
-    # preprocess source value to ensure that all values of in string type
-    source_values = preproces_source_values(source_values=source_values, value_default=value_default)
-
-    ########################################################
-
-    if standardized: # this has to come before clean operation
-        # df[col] = df[col].apply(standardize)
-        source_values = [standardize(source_value) for source_value in source_values]
-
-    # clean text 
-    if clean: 
-        # dft = df.loc[df[col].str.contains(r'\bby\b', flags=re.IGNORECASE)]
-        # index_keyword = dft.index
-        # print("... Prior to cleaning | df(by):\n{}\n".format(dft.head(10)))
-
-        # df[col] = df[col].apply(clean_term)
-        source_values = [clean_term(source_value) for source_value in source_values]
-
-    else: 
-        # remove extra spaces
-        # df[col] = df[col].apply(split_and_strip)
-        source_values = [split_and_strip(source_value) for source_value in source_values]
-
-    if return_dataframe: 
-        df[col] = source_values
-        return df
-
-    # if save: 
-    #     output_file=kargs.get('output_file')
-    #     LoincMTRT.save_derived_loinc_to_mtrt(df)
-    return source_values
+    # [output] dataframe with augmented columns capturing the "slots" (e.g. measurement units)
+    return LoincMTRT.extract_slots(df=df, col=col, source_values=source_values, **kargs)
 
 def clean_mtrt(df=None, col_target='medivo_test_result_type', **kargs): 
     """
@@ -491,7 +185,7 @@ def clean_mtrt(df=None, col_target='medivo_test_result_type', **kargs):
         # default: load source data (training data)
         df = load_src_data(cohort=cohort, warn_bad_lines=False, canonicalized=True, processed=True)
 
-    # df = process_text_col(df, col='medivo_test_result_type', add_derived=False, save=False)
+    # df = process_text(df, col='medivo_test_result_type', add_derived=False, save=False)
 
     site = config.site
     new_values = []
@@ -511,33 +205,6 @@ def clean_mtrt(df=None, col_target='medivo_test_result_type', **kargs):
         # df = update_values(df)
         df.to_csv(output_path, sep=sep, index=False, header=True)
     
-    return df
-
-def select_samples_by_loinc(df, target_codes, target_cols, **kargs):
-    """
-    Select training instances from the input data (df) such that: 
-
-    1) the assigned LOINC code of the chosen instance comes from one of the 'target_codes'
-    2) selet at most N (n_per_code) instances for each LOINC 
-    3) avoid sample duplicates wrt target_cols
-
-    """
-    col_code = kargs.get('col_code', LoincTSet.col_code)  # test_result_loinc_code
-    n_per_code = kargs.get('n_per_code', 3)
-    sizeDict = kargs.get('size_dict', {})  # maps LOINC to sample sizes
-
-    df = df.loc[df[col_code].isin(target_codes)]
-
-    dfx = []
-    for code, dfi in df.groupby([col_code, ]): 
-        dfi = dfi.drop_duplicates(subset=target_cols, keep='last')
-        n0 = dfi.shape[0]
-
-        n = min(n0, sizeDict[code]) if sizeDict and (code in size_dict) else min(n0, n_per_code)
-        dfx.append( dfi.sample(n=n, axis=0) )
-
-    df = pd.concat(dfx, ignore_index=True)
-
     return df
 
 def get_corpora_by_loinc(df, target_cols, **kargs):
@@ -599,10 +266,8 @@ def get_corpora_by_loinc(df, target_cols, **kargs):
         for col in target_cols: 
             source_values = df[col].str.upper().unique() # dfc[col].unique()
             if processed:
-                source_values = process_text_col(source_values=source_values, 
-                                   # add_derived=False,   # irrelevant when input is source_values 
-                                   remove_slot=False,  # remove a given concept from the text? (e.g. if [<unit>] found, then remove [<unit>] from the text)
-                                        clean=True, standardized=True, save=False, doc_type='one_loinc_code_per_doc', verbose=0)
+                source_values = process_text(source_values=source_values, 
+                                        clean=True, standardized=True, save=False, verbose=0)
                 
                 
                 source_values = np.unique(source_values)
@@ -685,10 +350,7 @@ def get_corpora_from_dataframe(df, target_cols, **kargs):
     if process_text: 
         N0 = len(corpora)
         col_new = 'temp_'
-        corpora = process_text_col(source_values=corpora, col=col_new, 
-                        # add_derived=False,   # irrelevant when input is source_values 
-                        remove_slot=False,  # remove a given concept from the text? (e.g. if [<unit>] found, then remove [<unit>] from the text)
-                            clean=True, standardized=True, save=False, doc_type='training data', verbose=verbose)
+        corpora = process_text(source_values=corpora, col=col_new, clean=True, standardized=True, save=False, verbose=verbose)
         assert len(corpora) == N0
 
     if add_loinc_mtrt: 
@@ -709,10 +371,7 @@ def get_corpora_from_dataframe(df, target_cols, **kargs):
         for r, row in dfp.sample(n=10).iterrows(): 
             print("... %s" % row[col_pt])
 
-        dfp = process_text_col(df=dfp, col=col_pt,
-                        add_derived=False, 
-                        remove_slot=False,  # remove a given concept from the text? (e.g. if [<unit>] found, then remove [<unit>] from the text)
-                        clean=True, standardized=True, save=False, doc_type='loinc+mtrt', transformed_vars_only=False)  # transformed_vars_only/True
+        dfp = process_text(df=dfp, col=col_pt, clean=True, standardized=True, save=False, transformed_vars_only=False)  # transformed_vars_only/True
         # assert col_lkey in dfp.columns
         print("... dim(dfp): {} =>\n{}\n".format(dfp.shape, dfp[[col_lkey, col_sn, col_ln]].head(10).to_string(index=False)))
         Nt = dfp.shape[0]
@@ -780,9 +439,8 @@ def tfidf_pipeline(corpora=[], df_src=None, target_cols=[], **kargs):
 
         if process_docs: 
             source_values = \
-                 process_text_col(source_values=source_values, add_derived=False, 
-                            remove_slot=False,  # remove a given concept from the text? (e.g. if [<unit>] found, then remove [<unit>] from the text)
-                            clean=True, standardized=True, save=False, doc_type='training data', transformed_vars_only=True)
+                 process_text(source_values=source_values, 
+                    clean=True, standardized=True, save=False, doc_type='training data')
         # source_values = dfp[col_new].values
     elif df_src is not None: 
         assert len(target_cols) > 0, "Target columns must be specified to extract corpus from a dataframe."
@@ -791,9 +449,8 @@ def tfidf_pipeline(corpora=[], df_src=None, target_cols=[], **kargs):
         # e.g. conjoining test_order_name, test_result_name
         conjoined = tr.conjoin(df, cols=target_cols, remove_dup=remove_dup, transformed_vars_only=True, sep=" ")
         source_values = \
-                    process_text_col(source_values=conjoined, col=col_new, add_derived=False, 
-                        remove_slot=False,  # remove a given concept from the text? (e.g. if [<unit>] found, then remove [<unit>] from the text)
-                        clean=True, standardized=True, save=False, doc_type='training data', transformed_vars_only=True)
+                    process_text(source_values=conjoined, col=col_new, 
+                        clean=True, standardized=True, save=False, doc_type='training data')
     else:  
         # default to use LOINC field and MTRT as the source corpus
         print("(tfidf_pipeline) Use LOINC field and MTRT as the source corpus by default.")
@@ -833,10 +490,7 @@ def tfidf_pipeline(corpora=[], df_src=None, target_cols=[], **kargs):
 
         assert len(conjoined) == df_loinc.shape[0]
 
-        source_values = \
-                process_text_col(source_values=conjoined, col=col_new, add_derived=False, 
-                        remove_slot=False,  # remove a given concept from the text? (e.g. if [<unit>] found, then remove [<unit>] from the text)
-                        clean=True, standardized=True, save=False, doc_type='training data', transformed_vars_only=True)  # transformed_vars_only/True
+        source_values = process_text(source_values=conjoined, col=col_new, clean=True, standardized=True) 
         print("(model) Processed conjoined loinc LN and MTRT:\n{}\n".format(df_loinc_p.head(30)))
 
 
@@ -851,30 +505,12 @@ def tfidf_pipeline(corpora=[], df_src=None, target_cols=[], **kargs):
     #######################################################
     # ... now we have the source corpus ready
 
-    # preproces_source_values(source_value=source_values, value_default=value_default)
+    # preprocess_text_simple(source_value=source_values, value_default=value_default)
     print("... n={} source values".format( len(source_values) ))
 
     # model, mydict, corpus = build_tfidf_model(source_values=source_values)
     model = lm.build_tfidf_model(source_values=source_values, standardize=False)
     return model
-
-def sample_negatives(code, candidates, n_samples=10, model=None, verbose=1): 
-    """
-    From the 'candidates' (LOINC codes), choose 'n_samples' codes as negative examples for the target 'code'
-
-    """
-    negatives = list(set(candidates)-set([code, ]))
-    N = len(negatives)
-
-    if model is None: 
-        # random pick N codes that are not the target
-        neff = min(N, n_samples)
-        if verbose and neff < n_samples: print("(sample_negatives) Not enough candidates for sampling n={} negatives".format(n_samples))
-        negatives = random.sample(negatives, neff)
-    else: 
-        raise NotImplementedError
-
-    return negatives
 
 def matching_score(query, code, model, loinc_lookup={}, standardize=False): 
     """
@@ -893,12 +529,11 @@ def matching_score(query, code, model, loinc_lookup={}, standardize=False):
         loinc_lookup = lmt.get_loinc_descriptors(dehyphenate=dehyphen, remove_dup=remove_dup)
     
     if standardize: 
-        query = process_text_col(source_values=[query, ], remove_slot=False,  
-                                    clean=True, standardized=True, save=False, doc_type='query', verbose=0)[0]
+        query = process_text(source_values=[query, ], clean=True, standardized=True, doc_type='query', verbose=0)[0]
 
     tokens = query.split()
 
-    return
+    raise NotImplementedError("Coming soon :)")
 
 def cosine_similarity(s1, s2, model, value_default=0.0):
     # from scipy.spatial import distance # cosine similarity
@@ -915,7 +550,20 @@ def cosine_similarity(s1, s2, model, value_default=0.0):
     #     print("(cosine_similarity) s2: {} => {}".format(s2, v2))
     return s
 
+def process_text(source_values, doc_type='query'): 
+    sp = "" if pd.isna(source_values) else text_processor.process_text(source_values=source_values, 
+                    clean=True, standardized=True, doc_type=doc_type)[0]
+    return sp
 def compute_similarity_with_loinc(row, code, model, loinc_lookup={}, target_cols=[], value_default=0.0, **kargs):
+    def iter_rules():
+        if len(matching_rules) > 0: 
+            for col, target_descriptors in matching_rules.items():
+                for dpt in target_descriptors:
+                    yield (col, dpt)
+        else: 
+            for col, dpt in itertools.product(target_cols, target_descriptors): 
+                yield (col, dpt)
+
     #from scipy.spatial import distance # cosine similarity
     import itertools
 
@@ -948,25 +596,27 @@ def compute_similarity_with_loinc(row, code, model, loinc_lookup={}, target_cols
     scores = []
     attributes = [] 
     named_scores = defaultdict(dict)
-    for col, desc in itertools.product(target_cols, target_descriptors):    
-        attributes.append(f"{col}_{desc}")
 
-        qv = row[col]
+    # for query, dpt in itertools.product(target_cols, target_descriptors):  
+    for query, dpt in iter_rules():
+        attributes.append(f"{query}_{dpt}")  # col, desc
+
+        qv = row[query]
         try: 
-            dv = loinc_lookup[code][desc]
+            dv = loinc_lookup[code][dpt]
         except: 
             tval = code in loinc_lookup
             msg = "Code {} exists in the table? {}\n".format(code, tval)
             if tval: msg += "... table keys: {}\n".format( list(loinc_lookup[code].keys()) )
             raise ValueError(msg)
 
-        qv = "" if pd.isna(qv) else process_text_col(source_values=qv, clean=True, standardized=True, remove_slot=False, doc_type='query')[0]
-        dv = "" if pd.isna(dv) else process_text_col(source_values=dv, clean=True, standardized=True, remove_slot=False, doc_type='doc')[0]
+        qv = "" if pd.isna(qv) else process_text(source_values=qv, clean=True, standardized=True, doc_type='query')[0]
+        dv = "" if pd.isna(dv) else process_text(source_values=dv, clean=True, standardized=True, doc_type='doc')[0]
 
         score = cosine_similarity(qv, dv, model)
         assert not pd.isna(score), "Null score | qv: {}, dv: {}".format(qv, dv)
         scores.append(score)
-        named_scores[col][desc] = score
+        named_scores[query][dpt] = score
 
     # if return_name_values: 
     #     return named_scores
@@ -1006,7 +656,6 @@ def gen_sim_vars(df=None, target_cols=[], model=None, **kargs):
     import transformer as tr
     # from scipy.spatial import distance # cosine similarity
     from sklearn.metrics.pairwise import linear_kernel  
-    # from transformer import preproces_source_values
 
     verbose = kargs.get('verbose', 1)
     cohort = kargs.get('cohort', 'hepatitis-c')  # used to index into the desired dataset
@@ -1245,22 +894,25 @@ def feature_transform(df, target_cols=[], df_src=None, **kargs):
     df: the data set containing the positive examples (with reliable LOINC assignments)
 
     """
-    def show_evidence(row, code_neg=None, sdict={}, print_=False, min_score=0.0):
+    def show_evidence(row, code_neg=None, sdict={}, print_=False, min_score=0.0, label='?'):
         # sdict: T-attribute -> Loinc descriptor -> score
-
+         
         code = row[LoincTSet.col_code]
-        msg = "(show_evidence) code: {}\n".format(code)
+        msg = "(evidence) Found matching signals > code: {} ({})\n".format(code, label)
         if code_neg is not None:
-            msg = "(show_evidence) {} ->? {}\n".format(code, code_neg) 
+            msg = "(evidence) {} ->? {} (-)\n".format(code, code_neg) 
             # ... the input code could be re-assigned to the code_neg
 
         for col, entry in sdict.items(): 
             msg += "... {}: {} ~ \n".format(col, row[col])  # a T-attribute and its value
             for col_loinc, score in entry.items():
                 if score > min_score: 
-                    msg += "    + {}: {} => score: {}\n".format(col_loinc, loinc_lookup[code][col_loinc], score)
+                    msg += "    + {}: {} => score: {}\n".format(col_loinc, process_text(loinc_lookup[code][col_loinc]), score)
         if print_: print(msg)
         return msg
+
+    from analyzer import load_src_data
+
     cohort = kargs.get('cohort', 'hepatitis-c')  # determines training data set
     target_codes = kargs.get('target_codes', []) 
     loinc_lookup = kargs.get('loinc_lookup', {})
@@ -1317,7 +969,7 @@ def feature_transform(df, target_cols=[], df_src=None, **kargs):
         dim0 = df.shape
 
         # df = df.loc[df[col_target].isin(target_codes)]
-        df = select_samples_by_loinc(df, target_codes=target_codes, target_cols=target_cols, n_per_code=3) # opts: size_dict
+        df = loinc.select_samples_by_loinc(df, target_codes=target_codes, target_cols=target_cols, n_per_code=3) # opts: size_dict
         print("[transform] filtered input by target codes (n={}), dim(df):{} => {}".format(len(target_codes), dim0, df.shape))
 
     if not loinc_lookup: 
@@ -1375,7 +1027,7 @@ def feature_transform(df, target_cols=[], df_src=None, **kargs):
                 #########################################################################
 
                 # [Q] what happens if we were to assign an incorrect LOINC code, will T-attributes stay consistent with its LOINC descriptor? 
-                codes_negative = sample_negatives(code, target_codes, n_samples=10, model=None, verbose=1)
+                codes_negative = loinc.sample_negatives(code, target_codes, n_samples=10, model=None, verbose=1)
                 
                 for code_neg in codes_negative: 
 
@@ -1415,10 +1067,9 @@ def feature_transform(df, target_cols=[], df_src=None, **kargs):
         pass  
 
     # note:        
-
     return X 
 
-def demo_create_tfidf_vars(**kargs):
+def demo_create_vars(**kargs):
     def save_corpus(df, domain, output_dir='data', output_file=''): 
         if not output_file: output_file = f"{domain}.corpus"
         output_path = os.path.join(output_dir, output_file)
@@ -1571,7 +1222,7 @@ def demo_create_tfidf_vars(**kargs):
                 #########################################################################
                 highlight("What if we assign a wrong code deliberately?", symbol='#')
                 # [Q] what happens if we were to assign an incorrect LOINC code, will T-attributes stay consistent with its LOINC descriptor? 
-                codes_negative = sample_negatives(code, target_codes, n_samples=10, model=None, verbose=1)
+                codes_negative = loinc.sample_negatives(code, target_codes, n_samples=10, model=None, verbose=1)
                 tFoundMatchInNeg = False
                 for code_neg in codes_negative: 
 
@@ -1618,13 +1269,13 @@ def demo_create_tfidf_vars(**kargs):
     # y = np.vstack([np.repeat(1, len(pos_instances)), np.repeat(0, len(neg_instances))])
 
     n_display = 10
-    subject = 'tfidf_vars'
+    vtype = subject = 'tfidf'
 
     df_match = pd.concat([df_pos, df_neg], ignore_index=True)
 
     parentdir = os.path.dirname(os.getcwd())
     testdir = os.path.join(parentdir, 'test')  # e.g. /Users/<user>/work/data
-    output_file = f'{subject}.csv'
+    output_file = f'{vtype}-vars.csv'
     output_path = os.path.join(testdir, output_file)
 
     # Output
@@ -1634,18 +1285,15 @@ def demo_create_tfidf_vars(**kargs):
 
     tabulate(df_match.sample(n=n_display), headers='keys', tablefmt='psql')
 
-    print('(demo) Plotting similarity matrix ...')
-    
-    fpath = os.path.join(testdir, f'heatmap-{subject}.png') 
     # ... tif may not be supported (Format 'tif' is not supported (supported formats: eps, pdf, pgf, png, ps, raw, rgba, svg, svgz))
     # plot_heatmap(data=df_match, output_path=fpath)
 
     # --- matching scores 
     # matching_score()
 
-    return
+    return df_match
 
-def demo_create_tfidf_vars_part2(**kargs): 
+def demo_create_vars_part2(**kargs): 
     """
 
     Memo
@@ -1740,7 +1388,7 @@ def demo_create_tfidf_vars_part2(**kargs):
     # sns.palplot(palette)
     # ---------------------------------------------
     n_display = 10
-    subject = 'tfidf_vars'
+    vtype = subject = kargs.get('vtype', 'tfidf')
 
     cols_y = ['label', ]
     cols_untracked = []
@@ -1749,7 +1397,7 @@ def demo_create_tfidf_vars_part2(**kargs):
     # read the feature vectors
     parentdir = os.path.dirname(os.getcwd())
     testdir = os.path.join(parentdir, 'test')  # e.g. /Users/<user>/work/data
-    input_file = f'{subject}.csv'
+    input_file = f'{vtype}-vars.csv'
     input_path = os.path.join(testdir, input_file)
     df_match = pd.read_csv(input_path, sep=",", header=0, index_col=None, error_bad_lines=False)
     # ---------------------------------------------
@@ -1776,7 +1424,7 @@ def demo_create_tfidf_vars_part2(**kargs):
     n_labels = np.unique(labels.values)
     # ---------------------------------------------
 
-    lut = {1: "#3933FF", 0: "#FF3368"} # dict(zip(labels.unique(), "rb"))
+    lut = {0: "#3933FF", 1: "#FF3368"} # dict(zip(labels.unique(), "rb"))
     # positive (blue): #3933FF, #3358FF, #e74c3c
     # negative (red) : #FF3368,  #3498db 
     print("... lut: {}".format(lut))
@@ -1823,9 +1471,9 @@ def demo_create_tfidf_vars_part2(**kargs):
     # colors:  cmap="vlag", cmap="mako", cmap=palette
     # normalization: z_score, stndardize_scale
 
-    output_path = os.path.join(testdir, f'heatmap-tfidf-{cohort}.png')
-    g.savefig(output_path, format='pdf', dpi=300, bbox_inches='tight') 
-    # saveFig(plt, output_path, dpi=300)
+    output_path = os.path.join(testdir, f'clustermap-{vtype}-{cohort}.pdf')
+    # g.savefig(output_path, format='pdf', dpi=300, bbox_inches='tight') 
+    saveFig(plt, output_path, dpi=300)
 
     ################################################
     df_match = pd.read_csv(input_path, sep=",", header=0, index_col=None, error_bad_lines=False)
@@ -1838,10 +1486,10 @@ def demo_create_tfidf_vars_part2(**kargs):
 
     # --- Enhanced heatmap 
     highlight("(demo) 2. Visualize feature values > (+) examples should higher feature values, while (-) have low to zero values")
-    output_path = os.path.join(testdir, f'tfidf-vars-pos-match-{cohort}.png')
+    output_path = os.path.join(testdir, f'{vtype}-pos-match-{cohort}.png')
     plot_data_matrix(df_pos, output_path=output_path, dpi=300)
 
-    output_path = os.path.join(testdir, f'tfidf-vars-neg-match-{cohort}.png')
+    output_path = os.path.join(testdir, f'{vtype}-neg-match-{cohort}.png')
     plot_data_matrix(df_neg, output_path=output_path, dpi=300)
 
     #################################################
@@ -1877,7 +1525,7 @@ def demo_create_tfidf_vars_part2(**kargs):
         alpha=0.3
     )
 
-    output_path = os.path.join(testdir, f'PCA-tfidf-{cohort}.png') 
+    output_path = os.path.join(testdir, f'PCA-{vtype}-{cohort}.png') 
     saveFig(plt, output_path, dpi=300)
 
     #################################################
@@ -1904,7 +1552,7 @@ def demo_create_tfidf_vars_part2(**kargs):
         alpha=0.3
     )
 
-    output_path = os.path.join(testdir, f'tSNE-tfidf-{cohort}.png') 
+    output_path = os.path.join(testdir, f'tSNE-{vtype}-{cohort}.png') 
     saveFig(plt, output_path, dpi=300)
         
     return
@@ -1974,8 +1622,8 @@ def test(**kargs):
     # demo_corpus(mode='code')
 
     #--- Text feature generation
-    # demo_create_tfidf_vars()
-    demo_create_tfidf_vars_part2()
+    # demo_create_vars()
+    demo_create_vars_part2()
 
     #--- Basic LOINC Prediction
     # demo_predict()

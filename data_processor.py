@@ -381,23 +381,6 @@ def map_group_to_label(df, cols=['test_result_code', 'test_result_name',], verbo
 
 ########################################################################################################
 
-def get_diabetes_data(): 
-    # https://www.kaggle.com/uciml/pima-indians-diabetes-database#diabetes.csv
-    
-    fpath = 'data/diabetes.csv'
-    # diabetes dataset
-    col_names = ['pregnant', 'glucose', 'bp', 'skin', 'insulin', 'bmi', 'pedigree', 'age', 'label']
-    # load dataset  
-    pima = pd.read_csv(fpath, header=1, names=col_names)  # header=None
-    print("> columns: {}".format(col_names))
-    
-    feature_cols = ['pregnant', 'insulin', 'bmi', 'age','glucose', 'bp', 'pedigree']
-    X = pima[feature_cols] # Features
-    y = pima.label # Target variable
-    
-    print("> data layout:\n{}\n".format(pima.head()))
-    
-    return (X, y, feature_cols) 
 
 def load_data0(input_path=None, input_file=None, col_target='label', exclude_vars=[],  sep=',', verbose=True): 
     """

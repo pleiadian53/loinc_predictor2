@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
-import os
+import os, sys
+import re
 from pandas import DataFrame 
 import numpy as np
 import pandas as pd
@@ -353,6 +354,253 @@ def get_loinc_descriptors(dehyphenate=True, remove_dup=False, verify=True, verbo
              "Invald dtype found in loinc_lookup:\n{}\n".format(tb)
 
     return loinc_lookup
+
+#################################################################
+# --- Utilities for feature extractions 
+
+def extract_slots(df=None, col='', source_values=[], **kargs):
+    verbose = kargs.get('verbose', 0)
+    docType = kargs.get('doc_type', "long name")
+    remove_slot = kargs.get('remove_slot', False) # if True, remove slot from text
+    save = kargs.get('save', False)
+
+    if len(source_values) > 0: 
+        if not col: col = 'processed'
+        df = DataFrame(source_values, columns=[col, ])
+    else: 
+        assert df is not None, "Both input dataframe (df) and source values were not given!"
+        source_values = df[col].values
+
+    # precondition
+    Nvar = df.shape[1]
+
+    # brackets
+    if verbose: print("(extract_slots) Extracting measurement units (i.e. [...]) ... ")
+    cols_target = [col, "unit"]
+    col_unit = 'unit'
+    cols_derived = ['unit', ]
+    bracketed = []
+    token_default = ""
+    null_rows = []
+    # n_malformed = 0
+    malformed = []
+    for r, doc in enumerate(source_values): 
+        if pd.isna(doc) or len(str(doc)) == 0: 
+            null_rows.append(r)
+            bracketed.append(token_default)
+            continue
+
+        b, e = doc.find("["), doc.find("]")
+        if b > 0: 
+            if not e > b: 
+                if verbose: print("(extract_slots) Weird doc (multiple [])? {}".format(doc))
+                # n_malformed += 1
+                malformed.append(doc)
+                bracketed.append(token_default)
+                continue
+
+            bracketed.append( re.search(r'\[(.*?)\]',doc).group(1).strip() )   # use .*? for non-greedy match
+        else: 
+            bracketed.append(token_default)
+    null_rows = set(null_rows)
+
+    
+    # --------------------------------------
+    # derived attributes
+    df[col_unit] = bracketed
+    # df[col_unit] = df[col].apply(re.search(r'\[(.*?)\]',s).group(1))
+    # --------------------------------------
+
+    if remove_slot: 
+
+        # [test]
+        target_index = []
+        if verbose: 
+            dft = df[df[col].str.contains("\[.*?\]")]
+            target_index = dft.index
+
+            print("(extract_slots) Malformed []-terms (n={}):\n{}\n".format(len(malformed), display(malformed)))
+            print("(extract_slots) After extracting unit (doc type: {}) | n(has []):{}, n(malformed): {} ...\n{}\n".format(docType, 
+                    dft.shape[0], len(malformed),
+                        tabulate(dft[cols_target].head(20), headers='keys', tablefmt='psql')))
+
+        df[col] = df[col].str.replace("\[.*?\]", '')
+
+        if verbose and len(target_index) > 0: 
+            print("(extract_slots) After removing brackets:\n{}\n".format(tabulate(df.iloc[target_index][cols_target].head(20), headers='keys', tablefmt='psql')))
+
+    ########################################################
+
+    # parenthesis
+    abbreviations = []
+    compounds = []
+    new_docs = []
+    col_abbrev = 'abbrev'
+    col_comp = 'compound'
+    cols_derived = cols_derived + [col_abbrev, col_comp, ]
+
+    ########################################################
+    p_abbrev = re.compile(r"(?P<compound>[-+a-zA-Z0-9,']+)\s+\((?P<abbrev>.*?)\)")  # p_context
+    # ... capture 2,2',3,4,4',5-Hexachlorobiphenyl (PCB)
+    # ... cannot capture Bromocresol green (BCG)
+
+    p_aka = re.compile(r"(?P<compound>[-+a-zA-Z0-9,']+)/(?P<abbrev>[-a-zA-Z0-9,']+)")
+    # ... 3-Hydroxyisobutyrate/Creatinine
+
+    p_abbrev2 = re.compile(r"(?P<compound>([-+a-zA-Z0-9,']+)(\s+[-a-zA-Z0-9,']+)*)\s+\((?P<abbrev>.*?)\)")
+    # ... von Willebrand factor (vWf) Ag actual/normal in Platelet poor plasma by Immunoassay
+
+    p_by = re.compile(r".*by\s+(?P<compound>([-+a-zA-Z0-9,']+)(\s+[-a-zA-Z0-9,']+)*)\s+\((?P<abbrev>.*?)\)")
+    p_supplement = p_ps = re.compile(r".*--\s*(?P<ps>([-+a-zA-Z0-9,']+)(\s+[-a-zA-Z0-9,']+)*)")
+    p_context_by = re.compile(r"by\s+(?P<compound>([-+a-zA-Z0-9,']+)(\s+[-a-zA-Z0-9,']+)*)\s+\((?P<abbrev>.*?)\)")
+    ########################################################
+    
+    if verbose: print("(extract_slots) Extracting compounds and their abbreviations ... ")
+    cols_target = [col, "compound", "abbrev"]
+    token_default = ""
+    n_null = n_malformed = 0
+    malformed = []
+    for r, doc in enumerate(source_values): 
+        # if r in null_rows: 
+        #     abbreviations.append(token_default)
+        #     compounds.append(token_default)
+        #     continue
+
+        b, e = doc.find("("), doc.find(")")
+        tHasMatch = False
+        if b > 0: 
+            if not (e > b): 
+                if verbose: print("(extract_slots) Weird doc (multiple parens)? {}".format(doc))
+                # e.g. MTRT: Functional Assessment of Incontinence Therapy - Fecal Questionnaire - version 4 ( [FACIT]
+                #      missing closing paran
+                abbreviations.append(token_default)
+                compounds.append(token_default)
+                # n_malformed += 1
+                malformed.append(doc)
+                new_docs.append(doc)
+                continue
+
+            m = p_abbrev.match(doc)
+            if m: 
+                abbreviations.append(m.group('abbrev').strip())
+                compounds.append(m.group('compound').strip())
+                tHasMatch = True
+            else:
+                # long name followed by keyword "by"
+                m = p_by.match(doc)
+                # e.g. fusion transcript  in Blood or Tissue by Fluorescent in situ hybridization (FISH) Narrative
+                # ~> Fluorescent in situ hybridization (FISH)
+                if m: 
+                    abbreviations.append(split_and_strip(m.group('abbrev'))) # m.group('abbrev').strip()
+                    compounds.append(split_and_strip(m.group('compound'))) # m.group('compound').strip())
+                    tHasMatch = True
+                else: 
+                    m = p_abbrev2.match(doc)
+                    if m: 
+                        abbreviations.append(split_and_strip(m.group('abbrev')))
+                        compounds.append(split_and_strip(m.group('compound')))
+                        tHasMatch = True
+
+            if not tHasMatch: 
+                # not matched in the beginning
+                # e.g. 14-3-3 protein [Presence] in Cerebral spinal fluid by Immunoblot (IB)
+                m = p_context_by.search(doc)
+                if m: 
+                    abbreviations.append(split_and_strip(m.group('abbrev')))
+                    compounds.append(split_and_strip(m.group('compound')))
+                    tHasMatch = True
+
+        ########################
+        if not tHasMatch: 
+            d = doc.find("/")
+            if d > 0: 
+                m = p_aka.match(doc)
+                if m: 
+                    abbreviations.append(m.group('abbrev').strip())
+                    compounds.append(m.group('compound').strip())
+                    tHasMatch = True
+
+        ########################
+        if not tHasMatch: 
+            abbreviations.append(token_default)
+            compounds.append(token_default)
+
+            # doc: no change
+        else:
+            # [test]
+            if remove_slot: 
+                doc = re.sub('\(.*?\)', '', doc)
+ 
+                b, e = doc.find("("), doc.find(")")
+                assert b < 0 or e < 0, "Multiple parens? {}".format(doc)
+
+        new_docs.append(doc)
+            
+    # --------------------------------------
+    # derived attributes
+    df[col_comp] = compounds
+    df[col_abbrev] = abbreviations
+    # --------------------------------------
+
+    if remove_slot:
+
+        # [test]
+        target_index = []
+        if verbose: 
+            dft = df[df[col].str.contains("\(.*?\)")]
+            target_index = dft.index
+            print("(extract_slots) Malformed ()-terms (n={}):\n{}\n".format(len(malformed), display(malformed)))
+            print("(extract_slots) After extracting 'compound' & 'abbreviation' (doc type: {}) | n(has_paran):{}, n(malformed):{} ...\n{}\n".format(
+                docType, dft.shape[0], len(malformed),
+                    tabulate(dft[cols_target][[col, col_abbrev]].head(200), headers='keys', tablefmt='psql')))
+
+        df[col] = df[col].str.replace("\(.*?\)", '')
+
+        if verbose > 1 and len(target_index) > 0: 
+            print("(extract_slots) After removing parens:\n{}\n".format(tabulate(df.iloc[target_index][cols_target].head(100), headers='keys', tablefmt='psql')))
+    # -------------------------------------------------------------        
+    # complex cases: 
+    #    Hepatitis B virus DNA [log units/volume] (viral load) in Serum or Plasma by NAA with probe detection
+
+    # df[col] = new_docs
+    ########################################################
+
+    if verbose: print("(extract_slots) Extracting Postscript ... ")
+    cols_target = [col, "note"]
+    col_note = 'note'
+    cols_derived = cols_derived + [col_note, ]
+    token_default = ""
+    notes = []
+    for r, doc in enumerate(source_values): 
+        # if r in null_rows: 
+        #     notes.append(token_default)
+        #     continue
+
+        m = p_ps.match(doc)
+        if m: 
+            notes.append(split_and_strip(m.group('ps')))
+        else: 
+            notes.append(token_default)
+
+    # --------------------------------------
+    df[col_note] = notes
+    # --------------------------------------
+    if remove_slot: 
+        df[col] = df[col].str.replace("--", " ")
+
+    if verbose > 1: 
+        dft = df[df[col].str.contains("--.*")]
+        print("(extract_slots) After extracting additional info (PS) [doc type: {}] | n(has PS): {} ... \n{}\n".format(
+            docType, dft.shape[0], tabulate(dft[cols_target].head(50), headers='keys', tablefmt='psql')))
+
+    assert df.shape[1] == Nv + 4
+
+    if save: 
+        # output_file=kargs.get('output_file')
+        LoincMTRT.save_derived_loinc_to_mtrt(df)
+
+    return df
+
 
 def test(): 
 

@@ -1,4 +1,4 @@
-import re, os
+import re, os, random
 import pandas as pd
 import numpy as np
 import data_processor as dp
@@ -122,10 +122,15 @@ class LoincTSet(TSet):
         return col
     @staticmethod
     def get_sdist_mapped_col_names(dtype, metrics=['LV', 'JW'], throw=True):
+        """
+        Attributes reserved for re-expressing text values in T-attributes in terms of LOINC vocab.
+
+        """
         cols = []
         for metric in metrics: 
             cols.append( LoincTSet.get_sdist_mapped_col_name(dtype, metric=metric, throw=throw) )
         return cols
+
     @staticmethod
     def get_sdist_matched_loinc_col_name(dtype, part='Component', vtype='Predicted', metric='LV', throw=True): 
         base = vtype + part
@@ -141,6 +146,10 @@ class LoincTSet(TSet):
     @staticmethod
     def get_sdist_matched_loinc_col_names(dtype, parts=['Component', 'System',], 
            types=['Predicted', 'MatchDist'], metrics=['LV', 'JW'], throw=True): 
+        """
+        Attributes reserved for T-attributes predicting LOINC parts. 
+
+        """
         
         cols = []
         for part in parts: 
@@ -149,6 +158,73 @@ class LoincTSet(TSet):
                     # base = t + part  # PredictedComponent
                     cols.append( LoincTSet.get_sdist_matched_loinc_col_name(dtype, vtype=t, part=part, metric=metric, throw=throw) )
         return cols
+
+    @staticmethod
+    def load_tfidf_vars(dtype, **kargs):
+        pass
+
+    @staticmethod
+    def load_sdist_vars(dtype, **kargs):
+        """
+
+        Memo
+        ----
+        1. Examples 
+            <file> test_order_name-sdist-vars.csv
+            <columns>
+ 
+                test_order_name
+                TestOrderMapLV  
+                TestOrderMapJW  
+                TOPredictedComponentLV  
+                TOMatchDistComponentLV  
+                TOPredictedComponentJW  
+                TOMatchDistComponentJW  
+                TOPredictedSystemLV 
+                TOMatchDistSystemLV 
+                TOPredictedSystemJW 
+                TOMatchDistSystemJW
+             
+                Note: values already cleaned, and standardized (e.g. capitalized)
+
+            other files: 
+
+                test_result_name-sdist-vars.csv
+
+           
+
+        """
+        verbose = kargs.get('verbose', 1)
+        throw = kargs.get('throw', False)
+        sep = kargs.get('sep', ',')
+
+        input_dir = kargs.get('input_dir', "data") # os.path.join(os.getcwd(), 'result')
+        input_file = kargs.get('input_file', f"{dtype}-sdist-vars.csv")  
+        input_path = os.path.join(input_dir, input_file)
+
+        df = None
+        if os.path.exists(input_path): 
+            df = pd.read_csv(input_path, sep=sep, header=0, index_col=None, error_bad_lines=False)
+            name = input_file.split('.')[0]
+            if verbose: print("(load_sdist_vars) dim(df<{}>): {}\n... columns:\n{}\n".format(name, df.shape, df.columns)) 
+        else: 
+            msg = "File does not exist at {}\n".format(input_path)
+            if throw: 
+                raise ValueError(msg)
+            else: 
+                if verbose: print(msg)
+        
+        return df
+    @staticmethod
+    def load_sdist_var_descriptors(target_cols, **kargs):
+        kargs['throw'] = False
+
+        adict = {}
+        for col in target_cols: 
+            df = LoincTSet.load_sdist_vars(col, **kargs)
+            if df is not None: 
+                adict[col] = df.fillna("")
+        return adict
 
 ### LoincTSet
 
@@ -309,6 +385,51 @@ def load_loinc_table(input_dir='LoincTable', input_file='', **kargs):
 
 # --- LOINC Utilities 
 ########################################################################
+
+def sample_negatives(code, candidates, n_samples=10, model=None, verbose=1): 
+    """
+    From the 'candidates' (LOINC codes), choose 'n_samples' codes as negative examples for the target 'code'
+
+    """
+    negatives = list(set(candidates)-set([code, ]))
+    N = len(negatives)
+
+    if model is None: 
+        # random pick N codes that are not the target
+        neff = min(N, n_samples)
+        if verbose and neff < n_samples: print("(sample_negatives) Not enough candidates for sampling n={} negatives".format(n_samples))
+        negatives = random.sample(negatives, neff)
+    else: 
+        raise NotImplementedError
+
+    return negatives
+
+def select_samples_by_loinc(df, target_codes, target_cols, **kargs):
+    """
+    Select training instances from the input data (df) such that: 
+
+    1) the assigned LOINC code of the chosen instance comes from one of the 'target_codes'
+    2) selet at most N (n_per_code) instances for each LOINC 
+    3) avoid sample duplicates wrt target_cols
+
+    """
+    col_code = kargs.get('col_code', LoincTSet.col_code)  # test_result_loinc_code
+    n_per_code = kargs.get('n_per_code', 3)
+    sizeDict = kargs.get('size_dict', {})  # maps LOINC to sample sizes
+
+    df = df.loc[df[col_code].isin(target_codes)]
+
+    dfx = []
+    for code, dfi in df.groupby([col_code, ]): 
+        dfi = dfi.drop_duplicates(subset=target_cols, keep='last')
+        n0 = dfi.shape[0]
+
+        n = min(n0, sizeDict[code]) if sizeDict and (code in size_dict) else min(n0, n_per_code)
+        dfx.append( dfi.sample(n=n, axis=0) )
+
+    df = pd.concat(dfx, ignore_index=True)
+
+    return df
 
 def expand_by_longname(df, col_src='test_result_loinc_code', 
                 col_derived='test_result_loinc_longname', df_ref=None, transformed_vars_only=False, dehyphenate=True):
@@ -748,11 +869,13 @@ def demo_feature_naming(**kargs):
     colx = []
     colm = []
     for dtype in dtypes: 
+        # T-attributes predicting LOINC parts
         cols = LoincTSet.get_sdist_matched_loinc_col_names(dtype, parts=['Component', 'System',], 
                types=['Predicted', 'MatchDist'], metrics=['LV', 'JW'], throw=True)
         colx.extend(cols)
         print("> predicted | [{}] {}".format(dtype, cols))
 
+        # re-expressed T-attributes
         cols = LoincTSet.get_sdist_mapped_col_names(dtype, metrics=['LV', 'JW'], throw=True)
         colm.extend( cols )
         print("> mapped    | [{}] {}".format(dtype, cols))
@@ -763,10 +886,10 @@ def test(**kargs):
     # demo_loinc(**kargs)
 
     # --- MTRT table (leela)
-    demo_mtrt()
+    # demo_mtrt()
 
     # --- attribute naming 
-    # demo_feature_naming()
+    demo_feature_naming()
 
     return
 

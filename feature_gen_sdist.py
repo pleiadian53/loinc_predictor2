@@ -1,7 +1,4 @@
-
 # coding: utf-8
-
-# In[1]:
 
 import pandas as pd
 from pandas import DataFrame
@@ -10,7 +7,9 @@ import os, sys
 import time
 from collections import defaultdict
 import csv
-import seaborn as sb
+import seaborn as sns
+from tabulate import tabulate
+from functools import partial
 # import rpy2.robjects as robjects
 # from APISearchRequests import *
 # import rpy2.robjects.numpy2ri as numpy2ri
@@ -21,11 +20,18 @@ import config
 
 from MapLOINCFields import *
 from CleanTextData import *
-from tabulate import tabulate
 
+import common
 import transformer
-from loinc import LoincTSet
+import loinc
+from loinc import LoincTSet, LoincTable
+from loinc_mtrt import LoincMTRT 
+import loinc_mtrt as lmt
+
+import text_processor
+# from text_processor import preprocess_text_simple, process_text
 from utils_sys import highlight
+
 
 # ### Read in aggregate data & join with parsed/cleaned test name and specimen
 
@@ -482,6 +488,153 @@ def save_match_matrix(df, output_file='', metric='JW', **kargs):
     df.to_csv(output_path, sep=sep, index=False, header=True)
     return
 
+def similarity_jaro_winkler(x, y, verbose=0):
+    from pyjarowinkler import distance
+    # value_default = "unknown"
+
+    score = 0.0
+    if pd.isna(x): x = ""
+    if pd.isna(y): y = ""
+    x = str(x)
+    y = str(y)
+    if x == "" and y == "": 
+        score = 0.1   # assign a small value
+    elif "" in (x, y):  # one of them is empty
+        score = 0.0   # as if they are the least match
+    else: 
+        score = distance.get_jaro_distance(x, y, winkler=True, scaling=0.1)
+    # try: 
+    #     score = distance.get_jaro_distance(x, y, winkler=True, scaling=0.1)
+    # except Exception as e: 
+    #     if verbose: print(e)
+    #     if pd.isna(x): x = ""
+    #     if pd.isna(y): y = ""
+    #     x = str(x)
+    #     y = str(y)
+    #     if x == "" and y == "": 
+    #         score = 0.1   # assign a small value
+    #     elif "" in (x, y):  # one of them is empty
+    #         score = 0.0   # as if they are the least match
+    #     else: 
+    #         if verbose: print("(similarity_jaro_winkler) Possibly non-string values (x: {}, y:{})".format(x, y))
+    #         score = distance.get_jaro_distance(x, y, winkler=True, scaling=0.1)
+    return score
+
+def similarity_fuzzy(x, y):
+    # import stringdist
+    from fuzzywuzzy import fuzz
+
+    score = 0.0
+    if pd.isna(x): x = ""
+    if pd.isna(y): y = ""
+    x = str(x)
+    y = str(y)
+    if x == "" and y == "": 
+        score = 0.1   # assign a small value
+    elif "" in (x, y):  # one of them is empty
+        score = 0.0   # as if they are the least match
+    else: 
+        # d = stringdist.levenshtein(x, y)
+        # Nx = len(x.split())
+        # Ny = len(y.split())
+        # score = (Nx + Ny - d)/(Nx + Ny)
+        score = fuzz.ratio(x, y)/100.0
+    return score
+
+def similarity_topn(x, y, min_score=0, topn='right', metric='jw',
+         max_len=30, min_substr=1, min_ratio=0.8, 
+         verify=0, return_named_scores=False, discount_dup=True):
+    from pyjarowinkler import distance
+    from algorithms import lcs_contiguous
+    # from fuzzywuzzy import fuzz
+    # from functools import partial
+
+    if discount_dup: 
+        x = remove_duplicates(x, sep=" ")
+        y = remove_duplicates(y, sep=" ")
+
+    x_tokens = x.split()
+    y_tokens = y.split()
+    Nx = len(x_tokens)
+    Ny = len(y_tokens)
+
+    if len(x_tokens) > max_len: 
+        x_tokens = list(common.ordered_sampled_without_replacement(x_tokens, k=max_len))
+    if len(y_tokens) > max_len: 
+        y_tokens = list(common.ordered_sampled_without_replacement(y_tokens, k=max_len))
+
+    scores = []
+    named_scores = []
+
+    if metric.startswith(('jw', 'jaro')):
+        sim_func = partial(distance.get_jaro_distance, winkler=True, scaling=0.1)
+    else: 
+        sim_func = similarity_fuzzy
+
+    for x_token in x_tokens:
+        # if not x_token in named_scores: named_scores[x_token] = {}
+        nx = len(x_token)
+
+        for y_token in y_tokens: 
+            ny = len(y_token)
+
+            # add filter 
+            s_xy = lcs_contiguous(x_token, y_token) 
+            r_xy = len(s_xy)/(min(nx, ny)+0.0)
+
+            # is numeric? 
+            score = 0.0
+            if x_token.isnumeric() or y_token.isnumeric(): 
+                score = 1.0 if x_token == y_token else 0.0 
+            elif (nx == 1 or ny == 1) and x_token[0] != y_token[0]: 
+                score = 0.0
+            else: 
+                if r_xy < min_ratio:
+                    score = 0.0   # no overlapping substring, consider totally different 
+                else: 
+                    score = sim_func(x_token, y_token)
+                
+            scores.append( score )
+            # if not x_token in named_scores: named_scores[x_token] = {}
+            # named_scores[x_token][y_token] = score
+            named_scores.append( (x_token, y_token, score) )
+
+    # average the top N matches
+    scores.sort(reverse=True)
+
+    if isinstance(topn, str): 
+        if topn.startswith('r'): 
+            topn = Ny
+        elif topn.startswith('l'): 
+            topn = Nx
+        elif topn.startswith('max'): 
+            topn = max(Nx, Ny)
+    else: 
+        if topn < 0: 
+            topn = Ny # max(Nx, Ny)
+
+    # avoid trivial match 
+    # e.g. IFE PE RANDOM URINE vs HFE P H63D BLD T QL
+    #[('PE', 'P', 0.85), ('IFE', 'HFE', 0.0), ('IFE', 'P', 0.0), 
+    # ('IFE', 'H63D', 0.0), ('IFE', 'BLD', 0.0), ('IFE', 'T', 0.0), ('IFE', 'QL', 0.0), 
+    # ('PE', 'HFE', 0.0), ('PE', 'H63D', 0.0), ('PE', 'BLD', 0.0), ('PE', 'T', 0.0), ('PE', 'QL', 0.0) ... 
+
+    # is the detected signal due to one letter match? 
+    ns = np.sum(np.array(scores) > 0)
+    named_scores = sorted(named_scores, key=lambda x:x[2], reverse=True)
+    final_score = np.mean(scores[:topn])
+
+    # rule-based score adjustment
+    if ns == 1: 
+        best_match = named_scores[0]
+        if len(best_match[0]) == 1 or (len(best_match[0]) == 1): 
+            # print("... found trivial match: {}".format(named_scores))
+            final_score = 0.0
+
+    if return_named_scores: 
+        return final_score, named_scores
+    return final_score
+
 def distance_jaro_winkler(x, y, verbose=0): 
     from pyjarowinkler import distance
     d = 1.0
@@ -570,9 +723,10 @@ def get_matches(data_col, loincmap, save=False):
                 dists_JW = [distance_jaro_winkler(term, str(token)) for token in loincmap.Token.values]
                 # ... 'scaling' should not exceed 0.25, otherwise the similarity could become larger than 1
 
-                # but if we can't find a match, the keep the original token? 
+                # [Q] but if we can't find a match, the keep the original token? 
 
-                mappedLV = loincmap.FinalTokenMap[np.argmin(dists_LV)] 
+                # map to expanded/full name 
+                mappedLV = loincmap.FinalTokenMap[np.argmin(dists_LV)]   
                 match_matrix_LV.iloc[i, j] = resolve(term, mappedLV)  # use short name as an anchor to compare (test_result_name and long name)
                 
                 mappedJW = loincmap.FinalTokenMap[np.argmin(dists_JW)]
@@ -606,6 +760,8 @@ def get_matches(data_col, loincmap, save=False):
     # TREPONEMA PALLIDUM ANTIBODIES                       TREPONEMA    PALLIDUM     ANTIBODIES           NaN      NaN  NaN
 
     return match_matrix_LV, match_matrix_JW
+# -- alias --
+reexpress_via_loincmap = get_matches
 
 
 def concatenate_match_results0(input_matrix, dataType):
@@ -624,7 +780,7 @@ def remove_duplicates(s, sep=" "):
     tokens = str(s).split(sep)
     return sep.join(sorted(set(tokens), key=tokens.index))
 
-def concatenate_match_results(input_matrix, dataType, metric='JW', remove_dup=True):
+def concatenate_match_results(input_matrix, dataType, metric='JW', remove_dup=False):
     n_rows = input_matrix.shape[0]
     n_cols = input_matrix.shape[1]
     for i in range(n_rows):
@@ -743,11 +899,6 @@ def add_string_distance_features():
     
     return dat
 
-def preproces_source_values(df, col='', source_values=[], value_default=""): 
-    # import transformer
-    return transformer.preproces_source_values(df=df, col=col, source_values=source_values, value_default=value_default)
-
-
 def make_string_distance_features(df=None, dataType='test_order_name', loincmap=None, 
        parsed_loinc_fields=None, source_values=[], verbose=1, transformed_vars_only=False, 
        uniq_src_vals=True, value_default="", standardize=False, drop_datatype_col=True, save=True):
@@ -781,7 +932,7 @@ def make_string_distance_features(df=None, dataType='test_order_name', loincmap=
                     dists.append(d)
 
                     if len(dists) < max_display: 
-                        print("... T-attribute value: {}:\n... Part expr: {}\n... dist={}\n".format(test_str, part_expr, d))
+                        print("... T-attribute value: {}:\n... Part expr: {}\n... dist({})={}\n".format(test_str, part_expr, metric, d))
                     # part_expr: CARDIAC PACEMAKER PROSTHETIC LEAD
                     # test_str: URINE MICROALBUMIN CREATININE RATIO
 
@@ -815,22 +966,23 @@ def make_string_distance_features(df=None, dataType='test_order_name', loincmap=
         source_values = df[dataType].values
 
     # preprocess source value to ensure that all values are of string type
-    # preproces_source_values(df, col=dataType, source_values=source_values, value_default=value_default)
+    # preprocess_text_simple(df, col=dataType, source_values=source_values, value_default=value_default)
 
-    if standardize: source_values = preproces_source_values(source_values=source_values, value_default="")
+    if standardize: source_values = text_processor.process_text(source_values=source_values, clean=True, standardized=True)
+    # preprocess_text_simple(source_values=source_values, value_default="")
     ############################################################
 
     if uniq_src_vals: 
         source_values = np.unique(source_values)
         print("(make_string_distance_features) Found {} unique source values".format(len(source_values)))
 
+    # --- Re-express T-attributes via loincmap
     # Find, for each T-string token, the best matched token from the loincmap
     # where T-string refers to the values of {test_order_name, test_result_name, ...}
 
     # test_match_matrix_JW = load_match_matrix(metric='JW')
     # test_match_matrix_LV = load_match_matrix(metric='LV')
-
-    test_match_matrix_LV, test_match_matrix_JW = get_matches(source_values, loincmap)
+    test_match_matrix_LV, test_match_matrix_JW = reexpress_via_loincmap(source_values, loincmap)
 
     if verbose: 
         # (sdf) string distance feature
@@ -858,13 +1010,12 @@ def make_string_distance_features(df=None, dataType='test_order_name', loincmap=
 
     # print("... concat_lv_test_match_result({}):\n{}\n".format(col_lv_matched_text, concat_lv_test_match_result[col_lv_matched_text].values))
 
+    assert df_transformed.shape[0] == concat_lv_test_match_result.shape[0]
     df_transformed = pd.merge(df_transformed, concat_lv_test_match_result, how='left', left_on=dataType, right_index=True)
     # ... join via df_transform[dataType] and index of concat_*
 
-    # col_jw_matched_text = LoincTSet.get_sdist_mapped_col_name(dataType, metric="JW")
-    # df_transformed[col_jw_matched_text] = concat_jw_test_match_result[col_jw_matched_text]
+    assert df_transformed.shape[0] == concat_jw_test_match_result.shape[0]
     df_transformed = pd.merge(df_transformed, concat_jw_test_match_result, how='left', left_on=dataType, right_index=True)
- 
     # concat_test_match_result = pd.concat([concat_lv_test_match_result, concat_jw_test_match_result], axis=1)
     
     print("... token(test) vs token(loinc) | after concatenation:\n{}\n".format(df_transformed.head(100)))
@@ -924,16 +1075,18 @@ def make_string_distance_features(df=None, dataType='test_order_name', loincmap=
     print("... unique Component (n={}):\n{}\n".format(len(unique_components), unique_components[:100]))
     print("... unique System (n={}):\n{}\n".format(len(unique_system), unique_system[:100]))
 
-    # ['PredictedComponentJW', 'ComponentMatchDistJW', 
-    #  'PredictedComponentLV', 'ComponentMatchDistLV',]
     cols_loinc_parts = LoincTSet.get_sdist_matched_loinc_col_names(dataType, parts=['Component', 'System',], 
            types=['Predicted', 'MatchDist'], metrics=['LV', 'JW'], throw=True)
+    # e.g. 
+    #  test_order_name => TO
+    #  ['TOPredictedComponentJW', 'TOComponentMatchDistJW', 
+    #   'TOPredictedComponentLV', 'TOComponentMatchDistLV',]
     print("... derived attributes from input col={}:\n{}\n".format(dataType, cols_loinc_parts))
 
     # 'TestOrderMapLV', 'TestOrderMapJW' + [ ... ]
     #######################################################
     print("... df_transformed prior to adding predicted, matchdist vars:\n{}\n".format(df_transformed.head(100).to_string(index=False)))
-    df_transformed = pd.concat([df_transformed, pd.DataFrame(columns=cols_loinc_parts)], sort=False)
+    df_transformed = pd.concat([df_transformed, pd.DataFrame(columns=cols_loinc_parts)], axis=1, sort=False)
     #######################################################
     
     # numpy2ri.activate()
@@ -941,7 +1094,7 @@ def make_string_distance_features(df=None, dataType='test_order_name', loincmap=
 
     if config.print_status == 'Y': print('String Distance Matching to LOINC Component and System')
     
-    # --- Test strings to predict LOINC parts (e.g. Component, System)
+    # --- T-attributes predicting LOINC parts (e.g. Component, System)
     #     i.e. features that gauge how well the test strings match with LOINC Component and System
 
     nrows = df_transformed.shape[0]
@@ -1028,7 +1181,358 @@ def make_string_distance_features(df=None, dataType='test_order_name', loincmap=
 
     return df
 
-def demo_create_distance_vars(save=True): 
+def process_text(source_values, doc_type='query'): 
+    sp = "" if pd.isna(source_values) else text_processor.process_text(source_values=source_values, 
+                    clean=True, standardized=True, doc_type=doc_type)[0]
+    return sp
+def preprocess_text_simple(df=None, col='', source_values=[], value_default=""):
+    return text_processor.preprocess_text_simple(df=df, col=col, source_values=source_values, value_default=value_default)
+ 
+def iter_rules(multibag): 
+    for k, dk in multibag.items():
+        for x in dk:
+            yield (k, x)
+def compute_similarity_with_loinc(row, code, target_cols=[], loinc_lookup={}, vars_lookup={}, **kargs):
+    def iter_rules():
+        if len(matching_rules) > 0: 
+            for col, target_descriptors in matching_rules.items():
+                for dpt in target_descriptors:
+                    yield (col, dpt)
+        else: 
+            for col, dpt in itertools.product(target_cols, target_descriptors): 
+                yield (col, dpt)
+
+    #from scipy.spatial import distance # cosine similarity
+    import itertools
+    # from functools import partial
+    from text_processor import has_common_tokens, has_common_prefix
+
+    # --- LOINC table attributes
+    col_ln, col_sn = LoincTable.long_name, LoincTable.short_name
+    col_lkey = LoincTable.col_key
+    col_com = LoincTable.col_com
+    ##################################
+    # --- Loinc to MTRT attributes (from Leela)
+    col_mval = LoincMTRT.col_value
+    col_mkey = LoincMTRT.col_key    # loinc codes in the mtrt table
+
+    dehyphen = kargs.get('dehyphenate', True)
+    remove_dup_tokens = kargs.get('remove_dup', False)
+    
+    # return_name_values = kargs.get('return_name_values', False)
+    add_sdist_vars = kargs.get('add_sdist_vars', False)
+    matching_rules = kargs.get('matching_rules', {})  # a dictionary from T-attributes to Loinc descriptors
+    value_default = kargs.get('value_default', 0.0)
+    
+    verify = kargs.get("verify", False)
+    class_label = kargs.get("label", '?') # is the input 'code' a positive or negative candidate? 
+
+    # algorithm parameters 
+    topn = kargs.get('topn', -1)
+    
+    target_descriptors = kargs.get('target_descriptors', [col_sn, col_ln, col_com])
+    if len(target_cols) == 0: 
+        target_cols = ['test_order_name', 'test_result_name', 'test_specimen_type', 'test_result_units_of_measure', ]
+        # ... other attributes: 'panel_order_name'
+
+        print("[feature generation] Variables defined wrt corpus from following attributes:\n{}\n".format(target_cols))
+        assert np.all([col in row.index for col in target_cols])
+
+    if not loinc_lookup: loinc_lookup = lmt.get_loinc_descriptors(dehyphenate=dehyphen, remove_dup=remove_dup_tokens, verify=True)
+    if not vars_lookup: vars_lookup = LoincTSet.load_sdist_var_descriptors(target_cols)
+
+    # --- Matching rules 
+    #     * compare {test_order_name, test_result_name} with SH, LN, Component
+
+    scores = []
+    attributes = [] 
+    named_scores = defaultdict(dict)
+
+    n_exp = 0
+    for query, dpt in iter_rules():    
+        attributes.append(f"{query}_{dpt}") # desc
+
+        t_text = row[query]   # t_tokens, d_tokens col
+        try: 
+            d_text = loinc_lookup[code][dpt]
+        except: 
+            tval = code in loinc_lookup
+            msg = "Code {} exists in the table? {}\n".format(code, tval)
+            if tval: msg += "... table keys: {}\n".format( list(loinc_lookup[code].keys()) )
+            raise ValueError(msg)
+
+        # query vs document (parts of docs)
+        # use preprocess_text_simple for now (source_values=source_values, value_default="")
+        t_text = process_text(t_text, doc_type='query')
+        d_text = process_text(d_text, doc_type='doc')
+
+        dfv = vars_lookup[query]  # col
+        dfv.fillna("", inplace=True)
+        dfvi = dfv.loc[dfv[query] == t_text]
+        #################################################
+        if dfvi.shape[0] != 1: 
+            msg = "Found n={} rows matching {}=\"{}\" ...\n".format(dfvi.shape[0], query, t_text)
+            print("... partially matched: ") 
+            p_matched = [row[query] for r, row in dfv.iterrows() 
+                            if has_common_tokens(s1=row[query], s2=t_text) and has_common_prefix(s1=row[query], s2=t_text)]
+            # for i, t_matched in enumerate( dfv.loc[dfv[query].apply( partial(has_common_tokens, s2=t_text))] ): 
+            for i, pm in enumerate(p_matched): 
+                print(f"   + [{i}] {pm}")
+            raise ValueError(msg)
+        #################################################
+
+        # if dfvi.shape[0] != 1: print("... Found n={} rows matching {}={} ...".format(dfvi.shape[0], query, t_text))
+
+        # -------------------------------------------------
+        # expand the T-attribute prior to comparing with LN
+        tExpanded = False
+        t_text_exp = t_text
+        if dpt in [col_ln, col_com, ]: 
+            assert not dfvi.empty, "Could not locate {}:\"{}\" in df({}):\n{}\n".format(query, t_text, query, dfv)
+            cols_mapped = LoincTSet.get_sdist_mapped_col_names(dtype=query, metrics=['JW', ], throw=True)
+            # ... e.g. TestOrderMapLV, TestOrderMapJW  
+            tExpanded = True
+
+            # for col in cols_mapped: 
+            col_mapped = cols_mapped[0] # col
+            assert col_mapped[0].isupper()
+
+            # expanded text 
+            t_text_exp = dfvi.iloc[0][col_mapped]
+            if t_text_exp != t_text: n_exp += 1
+
+            # if n_exp < 100: 
+            #     print("... {}: {} => {}".format(query, t_text, t_text_exp))
+            
+            score, sorted_scores = similarity_topn(t_text_exp, d_text, topn='right', metric='levenshtein', return_named_scores=True, discount_dup=True)
+        else: 
+            score, sorted_scores = similarity_topn(t_text, d_text, topn='right', metric='levenshtein', return_named_scores=True, discount_dup=True)
+            assert not pd.isna(score), "Null score | t_text: {}, d_text: {}".format(t_text, d_text)
+            
+        # -------------------------------------------------
+        if verify: 
+            if score > 0.0:
+                tstr = t_text_exp if tExpanded else t_text
+                print("[verify] Code: {}, label: {}".format(code, class_label))
+                print("...      Token-wise matching scores ({} vs {}:\"{}\"):\n{}\n".format(tstr, dpt, d_text, sorted_scores))
+                print("...      final score: {}\n".format(score))
+
+        scores.append(score)
+        named_scores[query][dpt] = score
+    ### End foreach rule      
+
+    ext_scores = []
+    if add_sdist_vars: 
+        # add matching distance
+        cols_mapped = get_sdist_matched_loinc_col_names(dtype=query, parts=['Component', 'System',], types=['MatchDist'], metrics=['LV', 'JW'], throw=True)
+        print("(compute_similarity_with_loinc) Appending sdist vars:\n{}\n".format(cols_mapped))
+        ext_scores = dfvi[cols_mapped].iloc[0].values
+        
+        for i, col_mapped in enumerate(cols_mapped): 
+            named_scores[query][col_mapped] =  ext_scores[i]
+
+        attributes += list(cols_mapped)
+        scores += list(ext_scores)
+                
+    # if return_name_values: 
+    #     return named_scores
+    #     # return list(zip(attributes, scores))
+    return scores, attributes, named_scores
+
+def feature_transform(df, target_cols=[], df_src=None, **kargs): 
+    """
+    Convert T-attributes string distance-based feature matrix with respect to the LOINC descriptors
+
+    df -> X
+
+    Params
+    ------ 
+    df: the data set containing the positive examples (with reliable LOINC assignments)
+
+    """
+    def show_evidence(row, code_neg=None, sdict={}, print_=False, min_score=0.0, label='?'):
+        # sdict: T-attribute -> Loinc descriptor -> score
+         
+        code = row[LoincTSet.col_code]
+        msg = "(evidence) Found matching signals > code: {} ({})\n".format(code, label)
+        if code_neg is not None:
+            msg = "(evidence) {} ->? {} (-)\n".format(code, code_neg) 
+            # ... the input code could be re-assigned to the code_neg
+
+        for col, entry in sdict.items(): 
+            msg += "... {}: {} ~ \n".format(col, row[col])  # a T-attribute and its value
+            for col_loinc, score in entry.items():
+                if score > min_score: 
+                    msg += "    + {}: {} => score: {}\n".format(col_loinc, process_text(loinc_lookup[code][col_loinc]), score)
+        if print_: print(msg)
+        return msg
+
+    from analyzer import load_src_data
+
+    cohort = kargs.get('cohort', 'hepatitis-c')  # determines training data set
+    target_codes = kargs.get('target_codes', []) 
+    loinc_lookup = kargs.get('loinc_lookup', {})
+    vars_lookup = kargs.get('vars_lookup', {})   # transformed T-strings from make_string_distance_features()
+    verify = kargs.get('verify', False)
+    save = kargs.get('save', False)
+
+    # --- LOINC table attributes
+    col_ln, col_sn = LoincTable.long_name, LoincTable.short_name
+    col_lkey = LoincTable.col_key
+    col_com = LoincTable.col_com
+    col_sys = LoincTable.col_sys
+    col_method = LoincTable.col_method
+    ######################################
+    # --- training data attributes 
+    col_target = LoincTSet.col_target # 'test_result_loinc_code'
+
+    # use the entire source as training corpus
+
+    # --- matching rules
+    ######################################
+    if len(target_cols) == 0: 
+        print("[transform] By default, we'll compare following variables with LOINC descriptors:\n{}\n".format(target_cols))
+        target_cols = ['test_order_name', 'test_result_name',  ] # 'test_result_units_of_measure',
+    assert np.all(col in df.columns for col in target_cols)
+    # ... other fields: 'panel_order_name'
+    target_descriptors = [col_sn, col_ln, col_com, ]
+    matching_rules = {'test_order_name': [col_sn, col_ln, col_com, ], 
+                      'test_result_name': [col_sn, col_ln, col_com, ], 
+                      # 'test_specimen_type': [col_sys, ], 
+                      # 'test_result_units_of_measure': [col_sn, col_method]
+                      }
+    ######################################
+    highlight("Gathering training corpus (by default, use all data assoc. with target cohort: {} ...".format(cohort), symbol='#')
+    if df_src is None: df_src = load_src_data(cohort=cohort, warn_bad_lines=False, canonicalized=True, processed=True)
+
+    non_codes = LoincTSet.null_codes # ['unknown', 'other', ]
+    if len(target_codes) > 0: 
+        # e.g. focus only on disease cohort-specific LOINC codes
+        target_codes = list(set(target_codes) - set(non_codes))
+
+        # select a subset of codes to create feature vectors
+        dim0 = df.shape
+
+        # df = df.loc[df[col_target].isin(target_codes)]
+        df = loinc.select_samples_by_loinc(df, target_codes=target_codes, target_cols=target_cols, n_per_code=3) # opts: size_dict
+        print("[transform] filtered input by target codes (n={}), dim(df):{} => {}".format(len(target_codes), dim0, df.shape))
+
+    if not loinc_lookup: 
+        loinc_lookup = lmt.get_loinc_descriptors(dehyphenate=True, remove_dup=False, recompute=True) # get_loinc_corpus_lookup_table(dehyphenate=True, remove_dup=False)
+        print("[transform] size(loinc_lookup): {}".format(len(loinc_lookup)))
+
+    if not vars_lookup: 
+       vars_lookup = LoincTSet.load_sdist_var_descriptors(target_cols)
+       assert len(vars_lookup) == len(target_cols)
+       print("[transform] size(vars_lookup): {}".format(len(vars_lookup)))
+
+    # gen_sim_features(df_src=df_src, df_loinc=None, df_map=None, transformed_vars_only=True, verbose=1) 
+    codes_missed = set([])
+    n_codes = 0
+    n_comparisons_pos = n_comparisons_neg = 0 
+    n_detected = n_detected_in_negatives = 0
+    pos_instances = []
+    neg_instances = []
+    N0 = df.shape[0]
+    tVerify = True
+    for code, dfc in df.groupby([LoincTSet.col_code, ]):
+        n_codes += 1
+
+        if n_codes % 10 == 0: print("[transform] Processing code #{}: {}  ...".format(n_codes, code))
+        if code in LoincTSet.null_codes: continue
+        if not code in loinc_lookup: 
+            codes_missed.add(code)
+
+        for r, row in dfc.iterrows():
+            # ... remember that each LOINC may have n>1 instances but with different combinations of T-attributes
+            
+            if code in loinc_lookup: 
+                # compute similarity scores between 'target_cols' and the LOINC descriptor of 'code' given trained 'model'
+                sv, attributes, named_scores = \
+                    compute_similarity_with_loinc(row, code, loinc_lookup=loinc_lookup, vars_lookup=vars_lookup,
+                        matching_rules=matching_rules, # this takes precedence over product(target_cols, target_descriptors)
+                            add_sdist_vars=False,
+
+                                # subsumed by matching_rules
+                                target_cols=target_cols, target_descriptors=target_descriptors) # target_descriptors
+                pos_instances.append(sv)  # sv: a vector of similarity scores
+
+                #########################################################################
+                if verify: 
+                    # positive_scores = defaultdict(dict)  # collection of positive sim scores, representing signals
+                    tHasSignal = False
+                    msg = f"[{r}] Code(+): {code} ~? target: {code}\n"
+                    for target_col, entry in named_scores.items(): 
+                        msg += "... Col: {}: {}\n".format(target_col, process_text(row[target_col]))
+                        msg += "... LN:  {}: {}\n".format(code, process_text(loinc_lookup[code][col_ln]))
+                        msg += "... SN:  {}: {}\n".format(code, process_text(loinc_lookup[code][col_sn]))
+                        
+                        for target_dpt, score in entry.items():
+                            n_comparisons_pos += 1
+                            if score > 0: 
+                                n_detected += 1
+                                msg += "    + {}: {}\n".format(target_dpt, score)
+                                # nonzeros.append((target_col, target_dpt, score))
+                                # positive_scores[target_col][target_dpt] = score
+                                tHasSignal = True
+                    # ------------------------------------------------
+                    if not tHasSignal: 
+                        msg += "...... FP > no similar properties found between {} and {} #\n".format(target_cols, target_descriptors)
+                        print(msg)
+                    if tHasSignal: 
+                        highlight(show_evidence(row, sdict=named_scores, print_=False, min_score=0.5), symbol='#')
+                #########################################################################
+
+                # [Q] what happens if we were to assign an incorrect LOINC code, will T-attributes stay consistent with its LOINC descriptor? 
+                codes_negative = loinc.sample_negatives(code, target_codes, n_samples=10, model=None, verbose=1)
+                
+                for code_neg in codes_negative: 
+
+                    if code_neg in loinc_lookup: 
+                        sv, attributes, named_scores = \
+                            compute_similarity_with_loinc(row, code_neg, loinc_lookup=loinc_lookup, vars_lookup=vars_lookup,
+                                 matching_rules=matching_rules, # this takes precedence over product(target_cols, target_descriptors)
+                                        add_sdist_vars=False,
+
+                                        # subsumed by matching_rules
+                                        target_cols=target_cols, target_descriptors=target_descriptors) # target_descriptors
+                        neg_instances.append(sv)  # sv: a vector of similarity scores
+                        
+                        # ------------------------------------------------
+                        if verify: 
+                            tHasSignal = False
+                            # positive_scores = defaultdict(dict)
+                            msg = f"[{r}] Code(-): {code_neg} ~? Target: {code}\n"
+                            for target_col, entry in named_scores.items(): 
+                                msg += "... Col: {}: {}\n".format(target_col, process_text(row[target_col]))
+                                msg += "... LN:  {}: {}\n".format(code_neg, process_text(loinc_lookup[code_neg][col_ln]))
+                                msg += "... SN:  {}: {}\n".format(code_neg, process_text(loinc_lookup[code_neg][col_sn]))
+
+                                # nonzeros = []
+                                for target_dpt, score in entry.items():
+                                    n_comparisons_neg += 1
+                                    if score > 0: 
+                                        n_detected_in_negatives += 1
+                                        msg += " ...... {}: {}\n".format(target_dpt, score)
+                                        # positive_scores[target_col][target_dpt] = score
+                                        tHasSignal = True
+
+                                if tHasSignal: 
+                                    msg += "...... FN > found similar properties between T-attributes(code={}) and negative: {}  ###\n".format(code, code_neg)
+                                    print(msg)  
+                                if tHasSignal: 
+                                    highlight(show_evidence(row, code_neg=code_neg, sdict=positive_scores, print_=False, min_score=0.5), symbol='#')
+                        # ------------------------------------------------
+    X = np.vstack([pos_instances, neg_instances])
+    print("[transform] from n(df)={}, we created n={} training instances".format(N0, X.shape[0]))
+    if save: 
+        pass  
+
+    # note:        
+
+    return X
+
+def demo_create_vars_init(save=False): 
     """
 
     Related
@@ -1048,9 +1552,12 @@ def demo_create_distance_vars(save=True):
     codes_hard = ccmap['hard']
     print("...    n_codes(hard): {}".format(len(codes_hard)))
     target_codes = list(set(np.hstack([codes_hard, codes_lsz])))
+
+    ######################################
     dfp = load_src_data(cohort=cohort, warn_bad_lines=False, canonicalized=True, processed=True)
     # adict = col_values_by_codes(target_codes, df=dfp, cols=['test_result_name', 'test_order_name'], mode='raw')
-    dfp = dfp.loc[dfp[col_target].isin(target_codes)]
+    # dfp = dfp.loc[dfp[col_target].isin(target_codes)]
+    ######################################
 
     # unique codes 
     unique_codes = dfp[col_target].unique()
@@ -1063,7 +1570,7 @@ def demo_create_distance_vars(save=True):
         # ... byproduct: loincmap-<cohort>.csv
 
     value_default = ""
-    target_test_cols = [ 'test_result_name', ] # 'test_order_name',
+    target_test_cols = [ 'test_order_name', 'test_result_name', ] # 'test_order_name',
     for col in target_test_cols: 
         print("(feature) Processing DataType/Column: {} ######\n... dim(data) BEFORE merge: {}\n".format(col, dfp.shape))
 
@@ -1073,7 +1580,7 @@ def demo_create_distance_vars(save=True):
 
         # --- pass only source valus
         dim0 = dfp.shape; N0 = dim0[0]
-        dfp = preproces_source_values(df=dfp, col=col, value_default=value_default)
+        dfp = preprocess_text_simple(df=dfp, col=col, value_default=value_default)
         assert dfp.shape == dim0
 
         uniq_src_vals = dfp[col].unique()
@@ -1094,8 +1601,10 @@ def demo_create_distance_vars(save=True):
                     drop_datatype_col=True, 
                     transformed_vars_only=transformed_vars_only, 
                     uniq_src_vals=True, value_default=value_default)
+        msg = "Prior to transformation dim0: {}, after dim: {}\n".format(dim0, dfp.shape)
+        print(msg)
         if not transformed_vars_only: 
-            assert dfp.shape[1] > dim0[1], "Prior to transformation dim0: {}, after dim: {}".format(dim0, dfp.shape)
+            assert dfp.shape[1] > dim0[1], msg
         print("... finishing string-matching features | dim(transformed): {} | N0: {}".format(dfp.shape, N0))
         # dft = make_string_distance_features(loincmap=loincmap, source_values=test_order_names)# source_values=dfp['test_order_name'].values)
         
@@ -1113,10 +1622,240 @@ def demo_create_distance_vars(save=True):
     print("Final dataframe dim: {}, cols: {}".format(dfp.shape, dfp.columns.values))
     
     if save: 
-        output_file = f"ts-{cohort}-proc.csv"
+        output_file = "sdist-vars0.csv" # f"ts-{cohort}-proc.csv"
         save_data(dfp, output_file=output_file, verbose=1)
 
     return
+
+def demo_create_vars(**kargs): 
+    """
+
+    Dependency
+    ----------
+    1. Run demo_create_sdist_vars0() first
+
+    Related
+    -------
+    feature_gen_sdist_vars()
+    """
+    def show_evidence(row, code_neg=None, sdict={}, print_=False, min_score=0.0, label='?'):
+        # sdict: T-attribute -> Loinc descriptor -> score
+         
+        code = row[LoincTSet.col_code]
+        msg = "(evidence) Found matching signals > code: {} ({})\n".format(code, label)
+        if code_neg is not None:
+            msg = "(evidence) {} ->? {} (-)\n".format(code, code_neg) 
+            # ... the input code could be re-assigned to the code_neg
+
+        for col, entry in sdict.items(): 
+            msg += "... {}: {} ~ \n".format(col, row[col])  # a T-attribute and its value
+            for col_loinc, score in entry.items():
+                if score > min_score: 
+                    msg += "    + {}: {} => score: {}\n".format(col_loinc, process_text(loinc_lookup[code][col_loinc]), score)
+        if print_: print(msg)
+        return msg
+
+    from analyzer import label_by_performance, col_values_by_codes, load_src_data
+    from feature_analyzer import plot_heatmap  
+
+    # --- LOINC table attributes
+    col_ln, col_sn = LoincTable.long_name, LoincTable.short_name
+    col_lkey = LoincTable.col_key
+    col_com = LoincTable.col_com
+    col_sys = LoincTable.col_sys
+    col_method = LoincTable.col_method
+    ######################################
+
+    ######################################
+    # --- Cohort definition (based on target condition and classifier array performace)
+    cohort = "hepatitis-c"
+    col_target = 'test_result_loinc_code'
+    categories = ['easy', 'hard', 'low']  # low: low sample size
+
+    ccmap = label_by_performance(cohort='hepatitis-c', categories=categories)
+
+    codes_lsz = ccmap['low']
+    print("(demo) n_codes(low sample size): {}".format(len(codes_lsz)))
+    codes_hard = ccmap['hard']
+    print("...    n_codes(hard): {}".format(len(codes_hard)))
+    target_codes = list(set(np.hstack([codes_hard, codes_lsz])))
+
+    # remove non-codes 
+    non_codes = ['unknown', 'other', ]
+    target_codes = list(set(target_codes) - set(non_codes))
+
+    df_src = load_src_data(cohort=cohort, warn_bad_lines=False, canonicalized=True, processed=False)
+    codeSet = df_src[col_target].unique()
+    ######################################
+
+    # use the entire source as training corpus
+
+    ######################################
+    # --- matching rules
+    target_cols = ['test_order_name', 'test_result_name', ] # 'test_result_units_of_measure'
+    # ... other fields: 'panel_order_name'
+
+    target_descriptors = [col_sn, col_ln, col_com, ]
+    matching_rules = {'test_order_name': [col_sn, col_ln, col_com, ], 
+                      'test_result_name': [col_sn, col_ln, col_com, ], 
+                      # 'test_specimen_type': [col_sys, ], 
+                      # 'test_result_units_of_measure': [col_sn, col_method]
+                      }
+    # Note: Expand tokes when matching with LN
+    ######################################
+
+    # adict = col_values_by_codes(target_codes, df=df_src, cols=['test_result_name', 'test_order_name'], mode='raw')
+    df_src = df_src.loc[df_src[col_target].isin(target_codes)]
+    print("(demo) dim(input): {}".format(df_src.shape))
+
+    loinc_lookup = lmt.get_loinc_descriptors(dehyphenate=True, remove_dup=False, recompute=True) # get_loinc_corpus_lookup_table(dehyphenate=True, remove_dup=False)
+    print("(demo) size(loinc_lookup): {}".format(len(loinc_lookup)))
+    
+    vars_lookup = LoincTSet.load_sdist_var_descriptors(target_cols)
+    assert len(vars_lookup) == len(target_cols)
+    print("(demo) size(vars_lookup): {}".format(len(vars_lookup)))
+
+    ############################################################################
+
+    # load intermediate result (sdist-vars0.csv)
+    
+    # TestOrderMapLV, TestOrderMapJW => LN
+    # 
+
+    ############################################################################
+    tVerifyPairwiseDist = True
+
+    # gen_sim_features(df_src=df_src, df_loinc=None, df_map=None, transformed_vars_only=True, verbose=1) 
+    codes_missed = set([])
+    n_codes = 0
+    n_comparisons_pos = n_comparisons_neg = 0 
+    n_detected = n_detected_in_negatives = 0
+    pos_instances = []
+    neg_instances = []
+    attributes = []
+    for code, dfc in df_src.groupby([LoincTSet.col_code, ]):
+        n_codes += 1
+        if code == LoincMTRT.col_unknown: continue
+        if not code in loinc_lookup: 
+            codes_missed.add(code)
+
+        for r, row in dfc.iterrows():
+            tHasSignal = False
+
+            if code in loinc_lookup: 
+                # compute similarity scores between 'target_cols' and the LOINC descriptor of 'code' given trained 'model'
+                scores, attributes, named_scores = \
+                    compute_similarity_with_loinc(row, code, loinc_lookup=loinc_lookup, vars_lookup=vars_lookup,
+                        matching_rules=matching_rules, # this takes precedence over product(target_cols, target_descriptors)
+                            add_sdist_vars=False,
+
+                                verify=tVerifyPairwiseDist, label='+',
+                                # subsumed by matching_rules
+                                target_cols=target_cols, target_descriptors=target_descriptors) # target_descriptors
+                pos_instances.append(scores)
+
+                # ------------------------------------------------
+                positive_scores = defaultdict(dict)
+                msg = f"[{r}] Code(+): {code}\n"
+                for target_col, entry in named_scores.items(): 
+                    msg += "... Col: {}: {}\n".format(target_col, process_text(row[target_col]))
+                    msg += "... LN:  {}: {}\n".format(code, process_text(loinc_lookup[code][col_ln]))
+                    msg += "... SN:  {}: {}\n".format(code, process_text(loinc_lookup[code][col_sn]))
+                    
+                    for target_dpt, score in entry.items():
+                        n_comparisons_pos += 1
+                        if score > 0: 
+                            n_detected += 1
+                            msg += "    + {}: {}\n".format(target_dpt, score)
+                            # nonzeros.append((target_col, target_dpt, score))
+                            positive_scores[target_col][target_dpt] = score
+                            tHasSignal = True
+                # ------------------------------------------------
+                if not tHasSignal: 
+                    msg += "...... ((( FP ))) No similar properties found between {} and {} #\n".format(target_cols, target_descriptors)
+                    print(msg)
+                else: 
+                    highlight(show_evidence(row, sdict=positive_scores, print_=False, label='+'), symbol='#')
+
+                #########################################################################
+                highlight("What if we assign a wrong code deliberately?", symbol='#')
+                # [Q] what happens if we were to assign an incorrect LOINC code, will T-attributes stay consistent with its LOINC descriptor? 
+                codes_negative = loinc.sample_negatives(code, target_codes, n_samples=10, model=None, verbose=1)
+                tFoundMatchInNeg = False
+                for code_neg in codes_negative: 
+
+                    if code_neg in loinc_lookup: 
+                        scores, attributes, named_scores = \
+                                compute_similarity_with_loinc(row, code_neg, loinc_lookup=loinc_lookup, vars_lookup=vars_lookup,
+                                    matching_rules=matching_rules, # this takes precedence over product(target_cols, target_descriptors)
+                                        add_sdist_vars=False,
+                                            verify=tVerifyPairwiseDist, label='-', 
+                                            # subsumed by matching_rules
+                                            target_cols=target_cols, target_descriptors=target_descriptors) # target_descriptors
+                        neg_instances.append(scores)
+                        
+                        positive_scores = defaultdict(dict)
+                        msg = f"[{r}] Code(-): {code_neg} ~? Target: {code}\n"
+                        for target_col, entry in named_scores.items(): 
+                            msg += "... Col: {}: {}\n".format(target_col, process_text(row[target_col]))
+                            msg += "... LN:  {}: {}\n".format(code_neg, process_text(loinc_lookup[code_neg][col_ln]))
+                            msg += "... SN:  {}: {}\n".format(code_neg, process_text(loinc_lookup[code_neg][col_sn]))
+
+                            # nonzeros = []
+                            for target_dpt, score in entry.items():
+                                n_comparisons_neg += 1
+                                if score > 0: 
+                                    n_detected_in_negatives += 1
+                                    msg += "    + {}: {}\n".format(target_dpt, score)
+                                    positive_scores[target_col][target_dpt] = score
+
+                            if len(positive_scores) > 0: 
+                                msg += "...... ((( FN ))) Found similar properties between T-attributes(code={}) and negative: {}  ###\n".format(code, code_neg)
+                                print(msg)  
+                            if len(positive_scores) > 0: 
+                                tFoundMatchInNeg = True
+                                highlight(show_evidence(row, code_neg=code_neg, sdict=positive_scores, print_=False, label='-'), symbol='#')
+                if tFoundMatchInNeg: 
+                    n_detected_in_negatives += 1
+
+    print("... There are n={} codes not found on the LONIC+MTRT corpus table:\n{}\n".format(len(codes_missed), codes_missed))
+    r_detected = n_detected/(n_comparisons_pos+0.0)
+    r_detected_in_neg = n_detected_in_negatives/(n_comparisons_neg+0.0)
+    print("...... Among N={} codes, r(detected): {}, r(detected in any -): {}".format(n_codes, r_detected, r_detected_in_neg))
+
+    # --- Visualize
+    df_pos = DataFrame(pos_instances, columns=attributes)
+    df_pos['label'] = 1
+    df_neg = DataFrame(neg_instances, columns=attributes)
+    df_neg['label'] = 0
+    # X = np.vstack([pos_instances, neg_instances])
+    # y = np.vstack([np.repeat(1, len(pos_instances)), np.repeat(0, len(neg_instances))])
+
+    n_display = 10
+    vtype = subject = 'sdist'
+
+    df_match = pd.concat([df_pos, df_neg], ignore_index=True)
+
+    parentdir = os.path.dirname(os.getcwd())
+    testdir = os.path.join(parentdir, 'test')  # e.g. /Users/<user>/work/data
+    output_file = f'{vtype}-vars.csv'
+    output_path = os.path.join(testdir, output_file)
+
+    # Output
+    # --------------------------------------------------------
+    print("(demo) Saving {} training data to {}".format(vtype, output_path))
+    df_match.to_csv(output_path, index=False, header=True)
+    # --------------------------------------------------------
+
+    tabulate(df_match.sample(n=n_display), headers='keys', tablefmt='psql')
+
+    return df_match
+
+def demo_create_vars_part2(**kargs): 
+    import feature_gen_tfidf as fgen
+
+    kargs['vtype'] = 'sdist'
+    return fgen.demo_create_vars_part2(**kargs)
 
 def test_csv_to_excel(input_file='', **kargs): 
     """
@@ -1146,6 +1885,82 @@ def test_csv_to_excel(input_file='', **kargs):
 
     return
 
+def demo_string_distance():
+    import itertools
+    x1 = 'URINE MICROALBUMIN'
+    x2 = 'XYZ SYNTHESIZES MICROALBUMIN'
+    x3 = 'URINE TEST'
+    x4 = "MICROALBUMIN URINE"
+    x5 = "ALBUMIN"
+    xlist = [x1, x2, x3, x4, x5]
+
+    for x, y in itertools.product(xlist, xlist):
+        d = similarity_topn(x, y, topn=3, metric='levenshtein')
+        print(f"... x: {x}")
+        print(f"... y: {y}")
+        print(f"    > score: {d}")
+
+    return
+
+def test_data():
+    import transformer as tr
+    from analyzer import load_src_data
+    from text_processor import has_common_tokens, has_common_prefix
+ 
+    cohort = "hepatitis-c"
+    col_target = 'test_result_loinc_code'
+
+    # ccmap = label_by_performance(cohort='hepatitis-c', categories= ['easy', 'hard', 'low'])
+    df_src = load_src_data(cohort=cohort, warn_bad_lines=False, canonicalized=True, processed=False)
+    codeSet = df_src[col_target].unique()
+
+    target_cols = ['test_order_name', ]
+    vars_lookup = LoincTSet.load_sdist_var_descriptors(target_cols)
+    
+    # test_str = ["URINALYSIS W MICRO REFLEX CULTURE", ]
+    n_miss = 0
+    for col in target_cols: 
+        source_values = df_src[col].unique()
+        dfv = vars_lookup[col]
+
+
+        for sval in source_values:  # foreach source value/text
+            sval = process_text(sval, doc_type='query')
+            if len(sval) == 0: continue 
+
+            dfvi = dfv.loc[dfv[col] == sval]
+            
+            # assert not dfvi.empty
+            if dfvi.empty: 
+                n_miss += 1
+                sval_tokens = sval.split()
+                print("[test] Could not find from source {}: \"{}\" a match in lookup table!".format(col, sval))
+           
+                if len(sval_tokens) > 0: 
+                    idx_matched = [r for r, row in dfv.iterrows() 
+                            if has_common_tokens(s1=row[col], s2=sval) and has_common_prefix(s1=row[col], s2=sval)]
+
+                    for r, row in dfv.iloc[idx_matched].iterrows(): 
+                        print("   + [{}] {}".format(r, row[col]))
+
+                    # remove repeats
+                    dfvm = dfv.iloc[idx_matched]
+                    dfvm[col] = dfvm[col].apply(tr.remove_duplicates)
+                    svalp = tr.remove_duplicates(sval)
+
+                    dfvm = dfvm.loc[dfvm[col] == svalp]
+
+                    if dfvm.empty: 
+                        msg = "[test] Still could not find a match for {}: \"{}\" in lookup table!\n".format(col, svalp)
+                        raise ValueError(msg)
+
+            else: 
+                assert dfvi.shape[0] == 1
+
+    print(f"[test] Found n(miss): {n_miss}")
+
+    return
+
 def test(): 
     # from MapLOINCFields import parse_loinc
 
@@ -1169,7 +1984,13 @@ def test():
     # make_string_distance_features(loincmap=loincmap, source_values=unique_tests)
 
     # --- features based on string distances
-    demo_create_distance_vars()
+    # demo_create_vars_init()
+    demo_create_vars()
+    demo_create_vars_part2()
+
+    # --- Test Utilities
+    # test_data()
+
 
     return
 
