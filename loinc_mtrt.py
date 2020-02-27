@@ -210,10 +210,15 @@ def merge_mtrt_loinc_table(df_mtrt=None, df_loinc=None, dehyphenate=True, target
     #     print("... n(unique): {}, n_multirow: {}".format(Nu, n_multirow))
     #     sys.exit(0)
 
+    # print("(merge_mtrt_loinc_table) target_cols:{}\n... cols(merged):\n{}\n".format(target_cols, df.columns))
+    # ['SHORTNAME', 'LONG_COMMON_NAME', 'COMPONENT', 'PROPERTY', 'TIME_ASPCT', 'SYSTEM', 'SCALE_TYP', 'METHOD_TYP', 'Medivo Test Result Type']
     if len(target_cols) > 0: 
 
         # we may need this column in order to faciliate join operations later 
         if not col_lkey in target_cols: target_cols = [col_lkey, ] + target_cols
+        if LoincMTRT.col_joined in target_cols: 
+            print("(merge_mtrt_loinc_table) Warning: Somehow LOINC_MTRT attribute seeped into target_cols:\n{}\n".format(target_cols))
+            target_cols.remove(LoincMTRT.col_joined)
 
         return df[target_cols]
 
@@ -233,7 +238,7 @@ def get_corpora_from_merged_loinc_mtrt(df_mtrt=None, df_loinc=None, target_cols=
     # optional parameters 
     output_file = kargs.get('output_file', LoincTSet.file_merged_loinc_mtrt) # "loinc_mtrt.corpus"
     output_dir = kargs.get("output_dir", "data")
-    col_new = kargs.get('col_new', LoincMTRT.col_joined)
+    col_new = kargs.get('col_new', LoincMTRT.col_joined) # LOINC_MTRT
     sep = kargs.get('sep', " ")
     save = kargs.get('save', True)
     # load = kargs.get('load', True)  # load precomputed table
@@ -247,8 +252,9 @@ def get_corpora_from_merged_loinc_mtrt(df_mtrt=None, df_loinc=None, target_cols=
     col_mval = LoincMTRT.col_value
     # col_mkey = LoincMTRT.col_key    # loinc codes in the mtrt table
 
-    if not target_cols: 
-        target_cols = LoincMTRT.cols_descriptor # SN+LN + 6p + MTRT
+    if not target_cols: target_cols = LoincMTRT.cols_descriptor # SN+LN + 6p + MTRT ([col_sn, col_ln] + cols_6p + [col_value, ])
+    print("(corpora_from_merged_loinc_mtrt) target cols:\n{}\n".format(target_cols))
+    if LoincMTRT.col_joined in target_cols: target_cols.remove(LoincMTRT.col_joined)
 
     df_merged = merge_mtrt_loinc_table(df_mtrt=df_mtrt, df_loinc=df_loinc, dehyphenate=dehyphenate, target_cols=target_cols)
     corpora = tr.conjoin(df_merged, cols=target_cols, transformed_vars_only=True, sep=sep, remove_dup=remove_dup)
@@ -263,7 +269,7 @@ def get_corpora_from_merged_loinc_mtrt(df_mtrt=None, df_loinc=None, target_cols=
     if return_dataframe: 
         df_merged[col_new] = corpora
         # df_merged[col_lkey] = df_merged[col_lkey].astype(str)
-        return df_merged
+        return df_merged   # col_new (e.g. LOINC_MTRT) carries the combined document of LOINC descriptors and MTRT
 
     return corpora
 
@@ -308,6 +314,10 @@ def get_loinc_corpus_lookup_table(dehyphenate=True, remove_dup=False, verify=Tru
     return loinc_lookup
 
 def get_loinc_descriptors(dehyphenate=True, remove_dup=False, verify=True, verbose=1, recompute=False):
+    """
+    Get the mapping (as a dictionary) from LOINC code to its descriptors (i.e. selective columns from the standard LOINC table)
+
+    """
     # from utils_sys import sample_dict
 
     # --- LOINC table attributes

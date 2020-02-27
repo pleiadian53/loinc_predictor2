@@ -26,6 +26,7 @@ class LoincTable(object):
     col_com = 'COMPONENT'
     col_sys = 'SYSTEM'
     col_method = 'METHOD_TYP'
+    col_prop = 'PROPERTY'
 
     cols_6p = six_parts = p6 = ['COMPONENT', 'PROPERTY', 'TIME_ASPCT', 'SYSTEM', 'SCALE_TYP', 'METHOD_TYP', ]  # ['CLASS']
     text_cols = ['LONG_COMMON_NAME', 'SHORTNAME', 'RELATEDNAMES2', 'STATUS_TEXT'] + cols_6p
@@ -53,7 +54,7 @@ class TSet(object):
     token_missing = 'unknown'
     token_default = 'unknown'
     token_other = 'other'
-    non_codes = [token_other, token_missing]
+    null_codes = [token_other, token_missing]
 
     codebook={'pos': 1, 'neg': 0, '+': 1, '-': 0}
 
@@ -67,7 +68,7 @@ class LoincTSet(TSet):
     # derived features 
     col_corpus = 'corpus'
     col_unknown = 'unknown'
-    null_codes = [col_unknown, 'other', ]
+    null_codes = non_codes = [col_unknown, 'other', ]
 
     cols_result_name_cleaned = ['Site', 'OriginalTestResult', 'CleanedTestResult']
     cols_order_name_cleaned = ["Site", "OriginalTestOrder", "CleanedTestOrder"]
@@ -169,7 +170,11 @@ class LoincTSet(TSet):
 
         Memo
         ----
-        1. Examples 
+        1. sdist variables are generated via 
+
+                feature_gen_sdist.make_string_distance_features()
+
+        2. Examples 
             <file> test_order_name-sdist-vars.csv
             <columns>
  
@@ -190,8 +195,6 @@ class LoincTSet(TSet):
             other files: 
 
                 test_result_name-sdist-vars.csv
-
-           
 
         """
         verbose = kargs.get('verbose', 1)
@@ -330,7 +333,7 @@ class FeatureSet(object):
             
                 ]
 
-    cont_cols = ['age',   # patient_gender -> age  # <<< 
+    cont_cols = ['age',   # patient_date_of_birth -> age  # <<< 
          ]  
 
     target_cols = ['test_result_loinc_code', ]
@@ -397,7 +400,7 @@ def sample_negatives(code, candidates, n_samples=10, model=None, verbose=1):
     if model is None: 
         # random pick N codes that are not the target
         neff = min(N, n_samples)
-        if verbose and neff < n_samples: print("(sample_negatives) Not enough candidates for sampling n={} negatives".format(n_samples))
+        if verbose and neff < n_samples: print("(sample_negatives) Not enough candidates (N={}) for sampling n={} negatives".format(N, n_samples))
         negatives = random.sample(negatives, neff)
     else: 
         raise NotImplementedError
@@ -415,7 +418,7 @@ def select_samples_by_loinc(df, target_codes, target_cols, **kargs):
     """
     col_code = kargs.get('col_code', LoincTSet.col_code)  # test_result_loinc_code
     n_per_code = kargs.get('n_per_code', 3)
-    sizeDict = kargs.get('size_dict', {})  # maps LOINC to sample sizes
+    sizeDict = kargs.get('size_dict', {})  # maps LOINC to (desired) sample sizes
 
     df = df.loc[df[col_code].isin(target_codes)]
 

@@ -19,7 +19,8 @@ from utils_sys import highlight
 from language_model import build_tfidf_model
 import config
 
-import common, text_processor
+import common
+import text_processor as tproc
 from text_processor import process_text
 from CleanTextData import standardize 
 
@@ -139,6 +140,11 @@ def process_each(mtrt_str, code=''):
 def process_loinc_table(): 
     pass
 
+def process_string(s, doc_type='string'): 
+    if pd.isna(s): return ""
+    sp = process_text(source_values=s, clean=True, standardized=True, doc_type=doc_type)[0]
+    return sp
+
 def display(x, n_delimit=80): 
     msg = "#" * n_delimit + '\n'
     if isinstance(x, list): 
@@ -250,7 +256,7 @@ def get_corpora_by_loinc(df, target_cols, **kargs):
     col_code = kargs.get('col_code', LoincTSet.col_code)  # test_result_loinc_code
     col_new = kargs.get('col_new', 'corpus')
     remove_dup = kargs.get('remove_dup', False)
-    processed = kargs.get('processed', True)
+    tProcessText = kargs.get('process_text', True) # processed
     verbose = kargs.get('verbose', 1)
     return_dataframe = kargs.get('return_dataframe', False)
 
@@ -260,16 +266,13 @@ def get_corpora_by_loinc(df, target_cols, **kargs):
     n_codes = 0
     for code, dfc in df.groupby([col_code, ]): 
         if verbose and (n_codes > 0 and n_codes % 10) == 0: 
-            print("(corpus) Processing code #{}: {}, n(rows): {}    #####".format(n_codes, code, dfc.shape[0]))
+            print("(corpora_by_loinc) Processing code #{}: {}, n(rows): {}    #####".format(n_codes, code, dfc.shape[0]))
 
         adict = {col:[] for col in target_cols}
         for col in target_cols: 
             source_values = df[col].str.upper().unique() # dfc[col].unique()
-            if processed:
-                source_values = process_text(source_values=source_values, 
-                                        clean=True, standardized=True, save=False, verbose=0)
-                
-                
+            if tProcessText:
+                source_values = process_text(source_values=source_values, clean=True, standardized=True)
                 source_values = np.unique(source_values)
                 # ... keep only unique values
                 source_values = tr.remove_null_like_values(source_values, extended='%')
@@ -302,7 +305,7 @@ def get_corpora_by_loinc(df, target_cols, **kargs):
     assert len(corpora) == N0
 
     if return_dataframe:
-        assert not (col_new in df.columns)
+        assert not (col_new in df.columns), "Corpus column is not found in the returned dataframe | cols(df):\n{}\n".format(df.columns)
         df[col_new] = corpora 
         return df
 
@@ -314,7 +317,7 @@ def get_corpora_from_dataframe(df, target_cols, **kargs):
     # add_derived = kargs.get('add_derived', False)
     add_loinc_mtrt = kargs.get('add_loinc_mtrt', True)
     dehyphenated = kargs.get('dehyphenate', True)
-    process_text = kargs.get('process_text', True)
+    tProcessText = kargs.get('process_text', True)
     verbose = kargs.get('verbose', 1)
     delimit = kargs.get('delimit', " ") 
     value_default = kargs.get('value_default', "") 
@@ -347,10 +350,10 @@ def get_corpora_from_dataframe(df, target_cols, **kargs):
     df = df.fillna(value_default)
     corpora = tr.conjoin(df, cols=target_cols, remove_dup=remove_dup, transformed_vars_only=True, sep=delimit)
 
-    if process_text: 
+    if tProcessText: 
         N0 = len(corpora)
-        col_new = 'temp_'
-        corpora = process_text(source_values=corpora, col=col_new, clean=True, standardized=True, save=False, verbose=verbose)
+        # col_new = 'temp_'
+        corpora = process_text(source_values=corpora, clean=True, standardized=True, save=False, verbose=verbose) # col=col_new
         assert len(corpora) == N0
 
     if add_loinc_mtrt: 
@@ -361,17 +364,20 @@ def get_corpora_from_dataframe(df, target_cols, **kargs):
         N0 = df.shape[0]
         # ------------------------------------
         col_pt = LoincMTRT.col_joined # 'LOINC_MTRT' 
+        cols_descriptor = LoincMTRT.cols_descriptor
         # dfp = lmt.load_corpora_from_merged_loinc_mtrt()
+
         dfp = lmt.get_corpora_from_merged_loinc_mtrt(dehyphenate=True, sep=delimit, remove_dup=remove_dup, 
-                     return_dataframe=True, col_new=col_pt)
+                     return_dataframe=True, col_new=col_pt, target_cols=cols_descriptor)
         # ... target_cols <- LoincMTRT.cols_descriptor
         # ... dfp: the combined loinc+mtrt corpus in a new column 'col_pt'
         # assert col_lkey in dfp.columns
+
         print("(get_corpora_from_dataframe) Example merge LOINC and MTRT:")
         for r, row in dfp.sample(n=10).iterrows(): 
             print("... %s" % row[col_pt])
 
-        dfp = process_text(df=dfp, col=col_pt, clean=True, standardized=True, save=False, transformed_vars_only=False)  # transformed_vars_only/True
+        dfp = process_text(df=dfp, col=col_pt, clean=True, standardized=True, transformed_vars_only=False)  # transformed_vars_only/True
         # assert col_lkey in dfp.columns
         print("... dim(dfp): {} =>\n{}\n".format(dfp.shape, dfp[[col_lkey, col_sn, col_ln]].head(10).to_string(index=False)))
         Nt = dfp.shape[0]
@@ -550,12 +556,8 @@ def cosine_similarity(s1, s2, model, value_default=0.0):
     #     print("(cosine_similarity) s2: {} => {}".format(s2, v2))
     return s
 
-def process_text(source_values, doc_type='query'): 
-    sp = "" if pd.isna(source_values) else text_processor.process_text(source_values=source_values, 
-                    clean=True, standardized=True, doc_type=doc_type)[0]
-    return sp
 def compute_similarity_with_loinc(row, code, model, loinc_lookup={}, target_cols=[], value_default=0.0, **kargs):
-    def iter_rules():
+    def iter_rules(target_cols, target_descriptors):
         if len(matching_rules) > 0: 
             for col, target_descriptors in matching_rules.items():
                 for dpt in target_descriptors:
@@ -578,6 +580,8 @@ def compute_similarity_with_loinc(row, code, model, loinc_lookup={}, target_cols
 
     dehyphen = kargs.get('dehyphenate', True)
     remove_dup_tokens = kargs.get('remove_dup', False)
+    matching_rules = kargs.get('matching_rules', {})  # a dictionary from T-attributes to Loinc descriptors
+    class_label = kargs.get('label', '?') # optinal meta data for testing/interpretation 
     # return_name_values = kargs.get('return_name_values', False)
     
     target_descriptors = kargs.get('target_descriptors', [col_sn, col_ln, col_com])
@@ -592,13 +596,12 @@ def compute_similarity_with_loinc(row, code, model, loinc_lookup={}, target_cols
         
     # --- Matching rules 
     #     * compare {test_order_name, test_result_name} with SH, LN, Component
-
     scores = []
     attributes = [] 
     named_scores = defaultdict(dict)
 
     # for query, dpt in itertools.product(target_cols, target_descriptors):  
-    for query, dpt in iter_rules():
+    for query, dpt in iter_rules(target_cols, target_descriptors):
         attributes.append(f"{query}_{dpt}")  # col, desc
 
         qv = row[query]
@@ -610,8 +613,8 @@ def compute_similarity_with_loinc(row, code, model, loinc_lookup={}, target_cols
             if tval: msg += "... table keys: {}\n".format( list(loinc_lookup[code].keys()) )
             raise ValueError(msg)
 
-        qv = "" if pd.isna(qv) else process_text(source_values=qv, clean=True, standardized=True, doc_type='query')[0]
-        dv = "" if pd.isna(dv) else process_text(source_values=dv, clean=True, standardized=True, doc_type='doc')[0]
+        qv = "" if pd.isna(qv) else process_string(qv, doc_type='query')
+        dv = "" if pd.isna(dv) else process_string(dv, doc_type='doc')
 
         score = cosine_similarity(qv, dv, model)
         assert not pd.isna(score), "Null score | qv: {}, dv: {}".format(qv, dv)
@@ -907,7 +910,7 @@ def feature_transform(df, target_cols=[], df_src=None, **kargs):
             msg += "... {}: {} ~ \n".format(col, row[col])  # a T-attribute and its value
             for col_loinc, score in entry.items():
                 if score > min_score: 
-                    msg += "    + {}: {} => score: {}\n".format(col_loinc, process_text(loinc_lookup[code][col_loinc]), score)
+                    msg += "    + {}: {} => score: {}\n".format(col_loinc, process_string(loinc_lookup[code][col_loinc]), score)
         if print_: print(msg)
         return msg
 
@@ -942,7 +945,7 @@ def feature_transform(df, target_cols=[], df_src=None, **kargs):
     matching_rules = {'test_order_name': [col_sn, col_ln, col_com, ], 
                       'test_result_name': [col_sn, col_ln, col_com, ], 
                       # 'test_specimen_type': [col_sys, ], 
-                      'test_result_units_of_measure': [col_sn, col_method]
+                      'test_result_units_of_measure': [col_sn, col_method], 
                       }
     ######################################
     highlight("Gathering training corpus (by default, use all data assoc. with target cohort: {} ...".format(cohort), symbol='#')
@@ -950,7 +953,7 @@ def feature_transform(df, target_cols=[], df_src=None, **kargs):
     col_new = 'corpus'
     # df_corpus = load_corpus(domain=cohort)
     df_corpus = get_corpora_by_loinc(df_src, target_cols, add_loinc_mtrt=True, 
-                processed=True, dehyphenate=True, verbose=1, return_dataframe=True, col_new=col_new, save=False)
+                process_text=True, dehyphenate=True, verbose=1, return_dataframe=True, col_new=col_new, save=False)
     corpus = df_corpus[col_new].values
     assert len(corpus) == len(codeSet), "Each code is represented by one document!"
     # ------------------------------------
@@ -1156,7 +1159,7 @@ def demo_create_vars(**kargs):
     df_corpus = load_corpus(domain=cohort)
     if df_corpus is None: 
         df_corpus = get_corpora_by_loinc(df_src, target_cols, add_loinc_mtrt=True, 
-            processed=True, dehyphenate=True, verbose=1, return_dataframe=True, col_new=col_new, save=False)
+            process_text=True, dehyphenate=True, verbose=1, return_dataframe=True, col_new=col_new, save=False)
         save_corpus(df_corpus, domain=cohort)
     corpus = df_corpus[col_new].values
     assert len(corpus) == len(codeSet), "Each code is represented by one document!"
@@ -1590,16 +1593,19 @@ def demo_corpus(mode='code'):
     
     if mode.startswith('reg'): 
         corpora = get_corpora_from_dataframe(df, target_cols, add_loinc_mtrt=True, processed=True, dehyphenate=True)
-        df['corpora'] = corpora
-        compare_col_values(df, target_cols+['corpora'], n=50, mode='sampling', include_6parts=True, include_mtrt=True, verbose=1, random_state=53)
+        col_corpus = 'corpus'
+        df[col_corpus] = corpora
+        highlight("(demo) n(docs): {}".format(df.shape[0]))
+        compare_col_values(df, target_cols+[col_corpus, ], n=50, mode='sampling', include_6parts=True, include_mtrt=True, verbose=1, random_state=53)
     else: 
-        highlight("(demo) Now make corpora by LOINC code such that each code has its down document")
+        highlight("(demo) Now make corpora by LOINC code such that each code has its down document.")
         return_dataframe = True  # for debugging
         col_corpus = 'corpus'
         df_corpus = get_corpora_by_loinc(df, target_cols, 
-            add_loinc_mtrt=True, processed=True, dehyphenate=True, verbose=1, 
+            add_loinc_mtrt=True, process_text=True, dehyphenate=True, verbose=1, 
             return_dataframe=return_dataframe, col_new=col_corpus)
-       
+        highlight("(demo) n(docs): {}".format(df_corpus.shape[0]))
+        assert df_corpus.shape[0] == len(df[LoincTSet.col_target].unique())
         compare_col_values(df_corpus, target_cols+[col_corpus, ], n=50, mode='sampling', include_6parts=True, include_mtrt=True, verbose=1, random_state=53)
     
     return
@@ -1619,10 +1625,10 @@ def test(**kargs):
     # demo_loinc_mtrt()
 
     # --- Training Corpus 
-    # demo_corpus(mode='code')
+    demo_corpus(mode='reg')
 
     #--- Text feature generation
-    # demo_create_vars()
+    demo_create_vars()
     demo_create_vars_part2()
 
     #--- Basic LOINC Prediction

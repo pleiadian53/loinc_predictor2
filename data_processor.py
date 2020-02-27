@@ -348,12 +348,20 @@ def toXY(df, cols_x=[], cols_y=[], untracked=[], **kargs):
     if scaler is not None: 
         if verbose: print("(toXY) Scaling X using method={}".format(scaler))
         from sklearn import preprocessing
-        if scaler.startswith('standard'): 
-            std_scale = preprocessing.StandardScaler().fit(X)
-            X = std_scale.transform(X)
-        elif scaler.startswith(('normalize', 'minmax')): 
-            minmax_scale = preprocessing.MinMaxScaler().fit(X)
-            X = minmax_scale.transform(X)
+
+        if isinstance(scaler, str): 
+            if scaler.startswith('standard'): 
+                std_scale = preprocessing.StandardScaler().fit(X)
+                X = std_scale.transform(X)
+            elif scaler.startswith(('normalize', 'minmax')): 
+                minmax_scale = preprocessing.MinMaxScaler().fit(X)
+                X = minmax_scale.transform(X)
+        else: 
+            try: 
+                X = scaler.transform(X)
+            except Exception as e: 
+                msg = "(toXY) Invalid scaler: {}".format(e)
+                raise ValueError(msg)
     
     # return (X, y, z, cols_x, cols_y)
     return (X, y, cols_x, cols_y)

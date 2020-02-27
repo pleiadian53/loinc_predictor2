@@ -82,14 +82,12 @@ lib_loc = "/Library/Frameworks/R.framework/Versions/Current/Resources/library"
 ## 13. Count (of total number of tests with the same [Test Name, Specimen Type, Units, and LOINC code])
 ## 14. Site identifier
 
-
 ## Enter the name of the column in your data source that contains the TEST NAME (i.e. Creatinine):
 test_col = test_order_col = 'test_order_name' 
 test_result_col = 'test_result_name'
 # ... alternative 
 #     test_result_name 
 test_value_col = 'test_result_value'
-
 test_comment_col = "test_result_comments"
 
 ## Enter the name of the column in your data source that contains the SPECIMEN TYPE (i.e. urine):
@@ -105,6 +103,7 @@ loinc_col = 'test_result_loinc_code'  #  'YOUR_LOINC_COL_NAME'
 tagged_col = 'medivo_test_result_type'
 
 dtypes = {test_order_col: str, test_result_col: str, spec_col: str}
+
 
 ###########################################################################################
 

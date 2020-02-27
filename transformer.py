@@ -170,6 +170,22 @@ def predicate_scaling(X, cols=[], mode='minmax'):
 
     return False
 
+def date_of_birth_to_age(x):
+    """
+    
+    Use 
+    ---
+    df['patient_date_of_birth'].apply(date_of_birth_to_age) 
+
+    Precondition
+    ------------
+    All values associated with this column has been imputed, 
+    reasonable default values filled
+    """
+    import datetime
+    now = datetime.datetime.now()
+    return now.year-int(x)
+
 def to_age(df, col='patient_date_of_birth', new_col='age', add_new_col=True, throw_=False, default_val=None):
     if not col in df.columns: 
         msg = "Error: Missing {}".format(col)
@@ -177,7 +193,6 @@ def to_age(df, col='patient_date_of_birth', new_col='age', add_new_col=True, thr
             
         # noop
         return df 
-    
     import datetime
     now = datetime.datetime.now()
     
@@ -185,11 +200,11 @@ def to_age(df, col='patient_date_of_birth', new_col='age', add_new_col=True, thr
     if default_val is None: default_val = int(df[col].mean())
     df[col].fillna(value=default_val, inplace=True)
     
+    df[new_col] = df[col].apply(lambda x: now.year-int(x))
     if add_new_col: 
-        df[new_col] = df[col].apply(lambda x: now.year-int(x))
+        pass
     else: 
         df.drop(col, axis=1, inplace=True)
-        df['age'] = df[col].apply(lambda x: now.year-int(x))
     return df
 
 def resolve_duplicate(df, cols=['test_result_loinc_code', ], add_count=True, col='count'): 

@@ -544,6 +544,18 @@ def similarity_fuzzy(x, y):
 def similarity_topn(x, y, min_score=0, topn='right', metric='jw',
          max_len=30, min_substr=1, min_ratio=0.8, 
          verify=0, return_named_scores=False, discount_dup=True):
+    """
+    Compute similarity between string x and y based on a given distance metric 
+    (e.g. Jaro-Winkler distance). 
+
+    Note that what this routine does is actually computing an "averaged" similarity
+    score from the pairwise comparisons between tokens in x and tokens in y -- and 
+    the average is taken wrt to the length of y, meaning that it computes:
+    
+    Among all the target tokens in y (say y represents a LOINC descriptor), 
+    to which degree of similarity are tokens in x able to capture?  
+
+    """
     from pyjarowinkler import distance
     from algorithms import lcs_contiguous
     # from fuzzywuzzy import fuzz
@@ -563,44 +575,61 @@ def similarity_topn(x, y, min_score=0, topn='right', metric='jw',
     if len(y_tokens) > max_len: 
         y_tokens = list(common.ordered_sampled_without_replacement(y_tokens, k=max_len))
 
-    scores = []
-    named_scores = []
-
     if metric.startswith(('jw', 'jaro')):
         sim_func = partial(distance.get_jaro_distance, winkler=True, scaling=0.1)
     else: 
         sim_func = similarity_fuzzy
 
-    for x_token in x_tokens:
-        # if not x_token in named_scores: named_scores[x_token] = {}
-        nx = len(x_token)
+    # print("(similarity_topn) x_tokens: {}, y_tokens: {}".format(x_tokens, y_tokens))
+    scores = []
+    named_scores = []
+    # Special cases: empty string 
+    x_token = y_token = ''
+    if Nx == 0 or Ny == 0: 
+        # if any token set is an empty set, the similarity is not well-defined => set to 0.
+        score = 0.0
+        if Nx != 0: x_token = x_tokens[0]
+        if Ny != 0: y_token = y_tokens[0]
 
-        for y_token in y_tokens: 
-            ny = len(y_token)
-
-            # add filter 
-            s_xy = lcs_contiguous(x_token, y_token) 
-            r_xy = len(s_xy)/(min(nx, ny)+0.0)
-
-            # is numeric? 
-            score = 0.0
-            if x_token.isnumeric() or y_token.isnumeric(): 
-                score = 1.0 if x_token == y_token else 0.0 
-            elif (nx == 1 or ny == 1) and x_token[0] != y_token[0]: 
-                score = 0.0
-            else: 
-                if r_xy < min_ratio:
-                    score = 0.0   # no overlapping substring, consider totally different 
-                else: 
-                    score = sim_func(x_token, y_token)
-                
-            scores.append( score )
+        scores.append( score )
+        named_scores.append( (x_token, y_token, score) )  # empty set does not have a well-defined token-vs-token entry either
+    else: 
+    
+        for x_token in x_tokens:
             # if not x_token in named_scores: named_scores[x_token] = {}
-            # named_scores[x_token][y_token] = score
-            named_scores.append( (x_token, y_token, score) )
+            nx = len(x_token)
+
+            for y_token in y_tokens: 
+                ny = len(y_token)
+
+                # add filter on common substring
+                s_xy = lcs_contiguous(x_token, y_token) 
+                r_xy = len(s_xy)/(min(nx, ny)+0.0)
+                # print("... nx: {}, ny: {}, s_xy: {}, r_xy: {}".format(nx, ny, s_xy, r_xy))
+
+                score = 0.0
+                if nx == 0 or ny == 0:   # empty string does not exhibit useful signals => set to 0.0 by default
+                    score = 0.0 
+                elif x_token.isnumeric() or y_token.isnumeric():  # numeric values have to be exactly the same to be equal
+                    score = 1.0 if x_token == y_token else 0.0
+                elif (nx == 1 or ny == 1) and x_token[0] != y_token[0]: 
+                    score = 0.0
+                else: 
+                    if r_xy < min_ratio:
+                        score = 0.0   # no overlapping substring => consider them totally different 
+                    else: 
+                        score = sim_func(x_token, y_token)
+                    
+                assert not pd.isna(score)
+                scores.append( score )
+                # if not x_token in named_scores: named_scores[x_token] = {}
+                # named_scores[x_token][y_token] = score
+                named_scores.append( (x_token, y_token, score) )
 
     # average the top N matches
     scores.sort(reverse=True)
+
+    # print("... sorted scores: {}".format(scores))
 
     if isinstance(topn, str): 
         if topn.startswith('r'): 
@@ -612,6 +641,8 @@ def similarity_topn(x, y, min_score=0, topn='right', metric='jw',
     else: 
         if topn < 0: 
             topn = Ny # max(Nx, Ny)
+    # finally, topn cannot be zero (consider if y string being empty)
+    topn = max(1, topn)
 
     # avoid trivial match 
     # e.g. IFE PE RANDOM URINE vs HFE P H63D BLD T QL
@@ -625,7 +656,9 @@ def similarity_topn(x, y, min_score=0, topn='right', metric='jw',
     final_score = np.mean(scores[:topn])
 
     # rule-based score adjustment
-    if ns == 1: 
+    if ns == 0: 
+        pass
+    elif ns == 1:  # ns: number of pairwise comparison in total
         best_match = named_scores[0]
         if len(best_match[0]) == 1 or (len(best_match[0]) == 1): 
             # print("... found trivial match: {}".format(named_scores))
@@ -1193,15 +1226,6 @@ def iter_rules(multibag):
         for x in dk:
             yield (k, x)
 def compute_similarity_with_loinc(row, code, target_cols=[], loinc_lookup={}, vars_lookup={}, **kargs):
-    def iter_rules():
-        if len(matching_rules) > 0: 
-            for col, target_descriptors in matching_rules.items():
-                for dpt in target_descriptors:
-                    yield (col, dpt)
-        else: 
-            for col, dpt in itertools.product(target_cols, target_descriptors): 
-                yield (col, dpt)
-
     #from scipy.spatial import distance # cosine similarity
     import itertools
     # from functools import partial
@@ -1243,6 +1267,14 @@ def compute_similarity_with_loinc(row, code, target_cols=[], loinc_lookup={}, va
 
     # --- Matching rules 
     #     * compare {test_order_name, test_result_name} with SH, LN, Component
+    def iter_rules():
+        if len(matching_rules) > 0: 
+            for col, target_descriptors in matching_rules.items():
+                for dpt in target_descriptors:
+                    yield (col, dpt)
+        else: 
+            for col, dpt in itertools.product(target_cols, target_descriptors): 
+                yield (col, dpt)
 
     scores = []
     attributes = [] 
@@ -1892,13 +1924,18 @@ def demo_string_distance():
     x3 = 'URINE TEST'
     x4 = "MICROALBUMIN URINE"
     x5 = "ALBUMIN"
-    xlist = [x1, x2, x3, x4, x5]
+    x6 = ""
+    xlist = [x1, x2, x3, x4, x5, x6]
 
     for x, y in itertools.product(xlist, xlist):
-        d = similarity_topn(x, y, topn=3, metric='levenshtein')
+        d = similarity_topn(x, y, topn='right', metric='levenshtein', return_named_scores=True, discount_dup=True)
         print(f"... x: {x}")
         print(f"... y: {y}")
         print(f"    > score: {d}")
+
+    # empty vs empty? 
+    d = similarity_topn("", "", topn='right', metric='levenshtein', return_named_scores=True, discount_dup=True)
+    print("... empty vs empty => {}".format(d))
 
     return
 
@@ -1983,10 +2020,13 @@ def test():
     # unique_tests = ['LIVER FIBROSIS FIBROMETER', 'AFP TUMOR MARKER', 'CBC W DIFF PLATELET', 'MEASLES MUMPS RUBELLA VARICELLA IGG IGM', ]
     # make_string_distance_features(loincmap=loincmap, source_values=unique_tests)
 
+    # --- string distance similarity
+    demo_string_distance()
+
     # --- features based on string distances
     # demo_create_vars_init()
-    demo_create_vars()
-    demo_create_vars_part2()
+    # demo_create_vars()
+    # demo_create_vars_part2()
 
     # --- Test Utilities
     # test_data()
