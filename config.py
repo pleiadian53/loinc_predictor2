@@ -14,8 +14,11 @@ analysis_path = os.path.join(project_path, 'analysis')
 
 ## Enter the directory where you would like the intermediate output files to be stored:
 ## Example: 'C:/Users/me/Documents/MyFiles/'
-out_dir = os.path.join(project_path, 'data')  # 'YOUR_DIRECTORY_HERE'
+data_dir = os.path.join(project_path, 'data')  # 'YOUR_DIRECTORY_HERE'
+outdir = data_dir
 # ... alternative LoincTable
+
+plot_dir = os.path.join(project_path, 'plot')
 
 ## Enter the filepath where your raw source data file is located along with :
 ## Example: ## Example: 'C:/Users/me/Documents/MyFiles/Data.txt'

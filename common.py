@@ -44,6 +44,52 @@ warnings.filterwarnings("ignore")
 #     if mx >= 0 and cost[lb] > mx: return result(mx+1)
 #     return result(cost[lb])
 
+def perturb(X, cols_x=[], cols_y=[], lower_bound=0, alpha=100.):
+    def add_noise():
+        min_nonnegative = np.min(X[np.where(X>lower_bound)])
+        
+        Eps = np.random.uniform(min_nonnegative/(alpha*10), min_nonnegative/alpha, X.shape)
+
+        return X + Eps
+    # from pandas import DataFrame
+
+    if isinstance(X, DataFrame):
+        from data_processor import toXY
+        X, y, fset, lset = toXY(X, cols_x=cols_x, cols_y=cols_y, scaler=None, perturb=False)
+        X = add_noise(X)
+        dfX = DataFrame(X, columns=fset)
+        dfY = DataFrame(y, columns=lset)
+        return pd.concat([dfX, dfY], axis=1)
+
+    X = add_noise()
+    return X
+
+def scale(X, scaler=None, **kargs):
+    from sklearn import preprocessing
+    if scaler is None: 
+        return X 
+
+    if isinstance(scaler, str): 
+        if scaler.startswith(('standard', 'z')): # z-score
+            std_scale = preprocessing.StandardScaler().fit(X)
+            X = std_scale.transform(X)
+        elif scaler.startswith('minmax'): 
+            minmax_scale = preprocessing.MinMaxScaler().fit(X)
+            X = minmax_scale.transform(X)
+        elif scaler.startswith("norm"): # normalize
+            norm = kargs.get('norm', 'l2')
+            copy = kargs.get('copy', False)
+            X = preprocessing.Normalizer(norm=norm, copy=copy).fit_transform(X)
+    else: 
+        try: 
+            X = scaler.transform(X)
+        except Exception as e: 
+            msg = "(scale) Invalid scaler: {}".format(e)
+            raise ValueError(msg)
+    return X
+# --- alias
+apply_scaling = scale
+
 def multiclass_roc_auc_score(y_test, y_pred, average="macro"):
     from sklearn.metrics import roc_auc_score
     from sklearn.preprocessing import LabelBinarizer
@@ -1370,96 +1416,8 @@ best = max if greater_is_better else min
 argbest = argmax if greater_is_better else argmin
 fmax_scorer = sklearn.metrics.make_scorer(fmax_score, greater_is_better = True, needs_threshold = True)
 
-def t_read(**kargs): 
-    def inspect(df):
-        print("... index: %s" % df.index.names)
-        print("... columns: %s" % df.columns.values[:10])
-        print('... dim(train_df):%s' % str(df.shape))
 
-        print('# \n')
-        return
-
-    import getpass
-    from utils_sys import div
-    import pandas as pd
-
-    user = getpass.getuser() # 'pleiades' 
-    project_path = '/Users/%s/Documents/work/data/diabetes_cf' % user  # /Users/pleiades/Documents/work/data/recommender
-
-    fold = 0
-    fold_count = 5
-    for i in range(fold_count): 
-        train_df, train_labels, test_df, test_labels = read_fold(project_path, fold) # [todo] single out this part
-        print('... size(train): {ntr}, size(test): {nt}'.format(ntr=train_df.shape[0], nt=test_df.shape[0]))
-    
-    inspect(train_df)
-    # train_df.reset_index(inplace=True)  # ~> index: None
-    train_df.reset_index(level=['id', 'label'], inplace=True)
-    inspect(train_df)
-
-    div('... read a random fold from %s' % os.path.basename(project_path))
-    n = 10
-    train_df = train_labels = dev_df = dev_labels = None
-    for i in range(5): 
-        train_df, train_labels, dev_df, dev_labels, test_df, test_labels = shuffle_split_cv(project_path, split_number=3, dev_ratio=1/5, max_size=None, fold=i, verbose=True) 
-        # read_random_fold(project_path, fold_count=5, dev_ratio=1/5., random_state=53, shuffle=True)
-        
-        print('train_df.index: {0}'.format(train_df.index))
-        print('size(train_df.index): %d' % len(train_df.index))
-
-        # note: cannot use hstack to merge two sets of indices
-        # train_dev_index = np.hstack( (train_df.index, dev_df.index) )
-        # print('size(train+dev): %d' % len(train_dev_index))  
-        # assert all(train_dev_index.get_level_values('label').values == np.hstack( (train_labels, dev_labels) ))
-
-        # non-overlapping
-        idx = train_df.index.get_level_values('id').values
-        idx_dev = dev_df.index.get_level_values('id').values
-        idx_test = test_df.index.get_level_values('id').values
-        assert len(set(idx).intersection(idx_dev)) == 0, "overlapped? {e}".format(e=set(idx).intersection(idx_dev))
-        assert len(set(idx).intersection(idx_test)) == 0
-        assert len(set(idx_dev).intersection(idx_test)) == 0
-
-        idx = train_df.index.get_level_values('id').values[:n]
-        idx_dev = dev_df.index.get_level_values('id').values[:n]
-        idx_test = test_df.index.get_level_values('id').values[:n]
-        labels = train_df.index.get_level_values('label').values[:n]
-        print('... sizes: {tr}, {dev}, {t}'.format(tr=train_df.shape[0], dev=dev_df.shape[0], t=test_df.shape[0]))
-        print('... round #{n} > idx:      {idx}'.format(n=i, idx=idx))
-        print('...            > dev idx:  {idx}'.format(idx=idx_dev))
-        print('...            > test idx: {idx}'.format(idx=idx_test))
-        print('...            > labels: {l}'.format(l=labels))
-
-    # now pretend that we've got our share of data for model selection 
-    print('#' * 80)
-
-    # n = n_test = 10
-    # df_dev = concat([train_df, dev_df])
-    # labels = df_dev.index.get_level_values('label').values
-    # N = 50
-    # for i in range(5): 
-    #     # print('>>> START round #{n}, dim(df_dev): {d}'.format(n=i, d=df_dev.shape))
-    #     train_df, dev_df, train_labels, dev_labels = split(df_dev, labels=labels, ratio=0.2, shuffle=True, max_size=N)
-
-    #     # non overlapping test 
-    #     idx = train_df.index.get_level_values('id').values
-    #     idx_dev = dev_df.index.get_level_values('id').values
-    #     assert len(set(idx).intersection(idx_dev)) == 0, "overlapped? {e}".format(e=set(idx).intersection(idx_dev))
-
-    #     idx = train_df.index.get_level_values('id').values[:n]
-    #     idx_dev = dev_df.index.get_level_values('id').values[:n]
-    #     label_subset = train_df.index.get_level_values('label').values[:n]
-    #     print('... sizes: {tr}, {dev}'.format(tr=train_df.shape[0], dev=dev_df.shape[0]))
-    #     print('... round #{n} > idx:           {idx}'.format(n=i, idx=idx))
-    #     print('...            > dev idx:       {idx}'.format(idx=idx_dev))
-    #     print('...            > train(labels): {l}'.format(l=label_subset))
-
-    #     print('>>> END round #{n}, dim(df_dev): {d}'.format(n=i, d=df_dev.shape))
-
-    
-    return
-
-def t_sampling(): 
+def demo_sampling(): 
     from analyze_performance import Analysis
     from stacking import read
     import collections
@@ -1602,19 +1560,23 @@ def t_distance():
 )
 
 def test(**kargs):
-    ### reading datasets 
-    # t_read()
 
     ### matching datasets by names (e.g. method_id generated by MFEnsemble.get_dset_id())
-    # t_match()
+    # demo_match()
 
-    # t_sampling()
+    # demo_sampling()
 
     ### utilty functions 
-    # t_utility()
+    # demo_utility()
 
     ### distance metric 
-    t_distance()
+    # demo_distance()
+
+    ### matrix operations 
+    X = np.random.randint(0, 5, (10, 10))
+    Xp = perturb(X, lower_bound=0, alpha=100.)
+    print("[test] X:\n{}\n".format(X))
+    print("...    Xp:\n{}\n".format(Xp))
 
     return 
 

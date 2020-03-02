@@ -21,7 +21,7 @@ import config
 
 import common
 import text_processor as tproc
-from text_processor import process_text
+from text_processor import process_text, process_string
 from CleanTextData import standardize 
 
 # from utils_plot import saveFig # contains "matplotlib.use('Agg')" which needs to be called before pyplot 
@@ -140,10 +140,10 @@ def process_each(mtrt_str, code=''):
 def process_loinc_table(): 
     pass
 
-def process_string(s, doc_type='string'): 
-    if pd.isna(s): return ""
-    sp = process_text(source_values=s, clean=True, standardized=True, doc_type=doc_type)[0]
-    return sp
+# def process_string(s, doc_type='string'): 
+#     if pd.isna(s): return ""
+#     sp = process_text(source_values=s, clean=True, standardized=True, doc_type=doc_type)[0]
+#     return sp
 
 def display(x, n_delimit=80): 
     msg = "#" * n_delimit + '\n'
@@ -395,6 +395,8 @@ def get_corpora_from_dataframe(df, target_cols, **kargs):
         #--------------------------------------------------
         
         corpora = tr.conjoin(df, cols=[col_pt0, col_pt], remove_dup=remove_dup, transformed_vars_only=True, sep=" ")
+        # col_pt0: T-attributes portoin of the document
+        # col_pt: merged LOINC-MTRT portion of the document
 
     if save: 
         output_path = os.path.join(output_dir, output_file)
@@ -897,20 +899,25 @@ def feature_transform(df, target_cols=[], df_src=None, **kargs):
     df: the data set containing the positive examples (with reliable LOINC assignments)
 
     """
-    def show_evidence(row, code_neg=None, sdict={}, print_=False, min_score=0.0, label='?'):
+    def show_evidence(row, code, code_neg=None, sdict={}, print_=False, min_score=0.0, label='?'):
         # sdict: T-attribute -> Loinc descriptor -> score
          
         code = row[LoincTSet.col_code]
-        msg = "(evidence) Found matching signals > code: {} ({})\n".format(code, label)
+        code_x = code   # Target code's corresponding T-attributes are to be matched against 
+
+        msg = "(evidence) Found matching signals for code(+): {} (target aka \"reliable\" positive)\n".format(code)
         if code_neg is not None:
-            msg = "(evidence) {} ->? {} (-)\n".format(code, code_neg) 
+            msg = "(hypothesis) Found matching signals when {}(+) is REASSIGNED to {} (-)?\n".format(code, code_neg) 
             # ... the input code could be re-assigned to the code_neg
+            label = '-'
+            code_x = code_neg
 
         for col, entry in sdict.items(): 
-            msg += "... {}: {} ~ \n".format(col, row[col])  # a T-attribute and its value
-            for col_loinc, score in entry.items():
+            msg += "... {}: {}\n".format(col, row[col])  # a T-attribute and its value
+            for col_loinc, score in entry.items():  # how does the current row's T attributes compared to the LOINC code's descriptors?
                 if score > min_score: 
-                    msg += "    + {}: {} => score: {}\n".format(col_loinc, process_string(loinc_lookup[code][col_loinc]), score)
+                    msg += "...  {}: {} => score: {} | {}({})\n".format(col_loinc, 
+                        process_string(loinc_lookup[code_x][col_loinc]), score, code_x, label)
         if print_: print(msg)
         return msg
 
@@ -1026,7 +1033,7 @@ def feature_transform(df, target_cols=[], df_src=None, **kargs):
                     if not tHasSignal: msg += "    + No similar properties found between {} and {} #\n".format(target_cols, target_descriptors)
                     print(msg)
                     if tHasSignal: 
-                        highlight(show_evidence(row, sdict=named_scores, print_=False), symbol='#')
+                        highlight(show_evidence(row, code=code, sdict=named_scores, print_=False), symbol='#')
                 #########################################################################
 
                 # [Q] what happens if we were to assign an incorrect LOINC code, will T-attributes stay consistent with its LOINC descriptor? 
@@ -1062,7 +1069,7 @@ def feature_transform(df, target_cols=[], df_src=None, **kargs):
                                     msg += "    + Found similar properties between T-attributes(code={}) and negative: {}  ###\n".format(code, code_neg)
                                 print(msg)  
                                 if tHasSignal: 
-                                    highlight(show_evidence(row, code_neg=code_neg, sdict=positive_scores, print_=False), symbol='#')
+                                    highlight(show_evidence(row, code=code, code_neg=code_neg, sdict=positive_scores, print_=False), symbol='#')
                         # ------------------------------------------------
     X = np.vstack([pos_instances, neg_instances])
     print("[transform] from n(df)={}, we created n={} training instances".format(N0, X.shape[0]))
@@ -1089,20 +1096,25 @@ def demo_create_vars(**kargs):
         else: 
             print("... No doc found!")
         return df
-    def show_evidence(row, code_neg=None, sdict={}, print_=False, min_score=0.0):
+    def show_evidence(row, code, code_neg=None, sdict={}, print_=False, min_score=0.0, label='?'):
         # sdict: T-attribute -> Loinc descriptor -> score
          
         code = row[LoincTSet.col_code]
-        msg = "(show_evidence) code: {}\n".format(code)
+        code_x = code   # Target code's corresponding T-attributes are to be matched against 
+
+        msg = "(evidence) Found matching signals for code(+): {} (target aka \"reliable\" positive)\n".format(code)
         if code_neg is not None:
-            msg = "(show_evidence) {} ->? {}\n".format(code, code_neg) 
+            msg = "(hypothesis) Found matching signals when {}(+) is REASSIGNED to {} (-)?\n".format(code, code_neg) 
             # ... the input code could be re-assigned to the code_neg
+            label = '-'
+            code_x = code_neg
 
         for col, entry in sdict.items(): 
-            msg += "... {}: {} ~ \n".format(col, row[col])  # a T-attribute and its value
-            for col_loinc, score in entry.items():
+            msg += "... {}: {}\n".format(col, row[col])  # a T-attribute and its value
+            for col_loinc, score in entry.items():  # how does the current row's T attributes compared to the LOINC code's descriptors?
                 if score > min_score: 
-                    msg += "    + {}: {} => score: {}\n".format(col_loinc, loinc_lookup[code][col_loinc], score)
+                    msg += "...  {}: {} => score: {} | {}({})\n".format(col_loinc, 
+                        process_string(loinc_lookup[code_x][col_loinc]), score, code_x, label)
         if print_: print(msg)
         return msg
 
@@ -1217,10 +1229,11 @@ def demo_create_vars(**kargs):
                             # nonzeros.append((target_col, target_dpt, score))
                             positive_scores[target_col][target_dpt] = score
                 # ------------------------------------------------
-                if len(positive_scores) == 0: msg += "    + No similar properties found between {} and {} #\n".format(target_cols, target_descriptors)
-                print(msg)
+                if len(positive_scores) == 0: 
+                    msg += "    + No similar properties found between {} and {} #\n".format(target_cols, target_descriptors)
+                    print(msg)
                 if len(positive_scores) > 0: 
-                    highlight(show_evidence(row, sdict=positive_scores, print_=False), symbol='#')
+                    highlight(show_evidence(row, code=code, sdict=positive_scores, print_=False), symbol='#')
 
                 #########################################################################
                 highlight("What if we assign a wrong code deliberately?", symbol='#')
@@ -1251,10 +1264,10 @@ def demo_create_vars(**kargs):
 
                             if len(positive_scores) > 0: 
                                 msg += "    + Found similar properties between T-attributes(code={}) and negative: {}  ###\n".format(code, code_neg)
-                            print(msg)  
+                                print(msg)  
                             if len(positive_scores) > 0: 
                                 tFoundMatchInNeg = True
-                                highlight(show_evidence(row, code_neg=code_neg, sdict=positive_scores, print_=False), symbol='#')
+                                highlight(show_evidence(row, code=code, code_neg=code_neg, sdict=positive_scores, print_=False), symbol='#')
                 if tFoundMatchInNeg: 
                     n_detected_in_negatives += 1
 
@@ -1378,8 +1391,12 @@ def demo_create_vars_part2(**kargs):
 
     plt.clf()
     
+    # Output parameters
     cohort = kargs.get('cohort', 'hepatitis-c')
-    tStandardize = False
+
+    # Data parameters
+    tScale = False  # set zcore = 1 within clustermap() instead
+    tPerturb = False
 
     # ---------------------------------------------
     # sns.set_color_codes("pastel")
@@ -1398,11 +1415,14 @@ def demo_create_vars_part2(**kargs):
     # ---------------------------------------------
 
     # read the feature vectors
-    parentdir = os.path.dirname(os.getcwd())
-    testdir = os.path.join(parentdir, 'test')  # e.g. /Users/<user>/work/data
-    input_file = f'{vtype}-vars.csv'
-    input_path = os.path.join(testdir, input_file)
-    df_match = pd.read_csv(input_path, sep=",", header=0, index_col=None, error_bad_lines=False)
+    df_match = kargs.get('df_match', None)
+    if df_match is None: 
+        parentdir = os.path.dirname(os.getcwd())
+        testdir = os.path.join(parentdir, 'test')  # e.g. /Users/<user>/work/data
+        input_file = kargs.get("input_file", f'{vtype}-vars.csv') 
+        input_path = os.path.join(testdir, input_file)
+        assert os.path.join(input_path), "Invalid data file:\n{}\n".format(input_path)
+        df_match = pd.read_csv(input_path, sep=",", header=0, index_col=None, error_bad_lines=False)
     # ---------------------------------------------
 
     # limit sample size to unclutter plot 
@@ -1428,8 +1448,8 @@ def demo_create_vars_part2(**kargs):
     # ---------------------------------------------
 
     lut = {0: "#3933FF", 1: "#FF3368"} # dict(zip(labels.unique(), "rb"))
-    # positive (blue): #3933FF, #3358FF, #e74c3c
-    # negative (red) : #FF3368,  #3498db 
+    # negative (blue): #3933FF, #3358FF, #e74c3c
+    # positive (red) : #FF3368,  #3498db 
     print("... lut: {}".format(lut))
     row_colors = labels.map(lut)
 
@@ -1444,8 +1464,8 @@ def demo_create_vars_part2(**kargs):
     # standardize the data
     print("... col(df_match): {}".format(df_match.columns.values))
 
-    if tStandardize:
-        X, y, fset, lset = toXY(df_match, cols_y=cols_y, scaler='standardize')
+    if tScale:
+        X, y, fset, lset = toXY(df_match, cols_y=cols_y, scaler='standardize', perturb=tPerturb)
         print("... feature set: {}".format(fset))
 
         # df_match = DataFrame(np.hstack([X, y, z]), columns=fset+lset+cols_untracked)
@@ -1461,7 +1481,8 @@ def demo_create_vars_part2(**kargs):
 
     # Normalize the data within the rows via z_score
     sys.setrecursionlimit(10000)
-    g = sns.clustermap(dfX, figsize=(15, 24.27), z_score=1, row_colors=row_colors, cmap='vlag', metric='cosine', method='complete')  
+    g = sns.clustermap(dfX, figsize=(15, 24.27), row_colors=row_colors, z_score=1,
+                cmap='vlag', metric='cosine', method='complete')  # z_score=1, vmin=0, vmax=1
     # ... need to pass dataframe dfX instead of X! 
 
     # g.set_xticklabels(g.get_xticklabels(), rotation=45)

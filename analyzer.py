@@ -170,26 +170,59 @@ def summarize_dataframe(df, n=1):
 # alias 
 summary = summarize_dataframe
 
+def show_dict(adict, topn=-1, by='', header=[], n_samples=-1, ascending=False, print_=False): 
+    # print(adict)
+    
+    # convert to two-column dataframe format 
+    if not header: 
+        header = ['key', 'value']
+    else: 
+        assert len(header) == 2
+    D = {h:[] for h in header}
+    for k, v in adict.items(): 
+        D[header[0]].append(k)
+        D[header[1]].append(v)
+    
+    df = DataFrame(D, columns=header)
+    msg = ''
+    if topn > 0: 
+        assert by in df.columns
+        df = df.sort_values([by, ], ascending=ascending)
+        msg = tabulate(df[:topn], headers='keys', tablefmt='psql')
+    else: 
+        if n_samples < 0: 
+            msg = tabulate(df, headers='keys', tablefmt='psql')
+        else: 
+            n = min(df.shape[0], n_samples)
+            msg = tabulate(df.sample(n=n), headers='keys', tablefmt='psql')
+    if print_: print(msg)
+    return msg
 
 # Classifier Utilties
 #######################################################
 
-def run_model_selection(X, y, model, p_grid={}, n_trials=30, scoring='roc_auc', output_path='', output_file='', create_dir=True, 
-                        index=0, plot_=True, ext='tif', save=False, verbose=1): 
+def run_model_selection(X, y, model, p_grid={}, n_runs=30, scoring='roc_auc', output_path='', output_file='', **kargs): 
     from sklearn.model_selection import GridSearchCV, cross_val_score, KFold
-    from matplotlib import pyplot as plt
     
+    create_dir = kargs.get("create_dir", True)
+    meta = kargs.get("meta", "")
+    plot_ = kargs.get("plot", True)
+    ext = kargs.get("ext", "tif"),
+    index = kargs.get("index", 0)
+    save_plot = kargs.get("save", False)  # save
+    verbose = kargs.get("verbose", 1)
+    dpi = kargs.get('dpi', 300)
+
     # Arrays to store scores
-    non_nested_scores = np.zeros(n_trials)
-    nested_scores = np.zeros(n_trials)
+    non_nested_scores = np.zeros(n_runs)
+    nested_scores = np.zeros(n_runs)
 
     # Loop for each trial
     icv_num = 5
     ocv_num = 5
-    best_params = {}
-    for i in range(n_trials):
-        if verbose: 
-            print("(run_model_selection) Trial #{} ......".format(i+1))
+    params = {}  # trial to best params
+    for i in range(n_runs): 
+
         # Choose cross-validation techniques for the inner and outer loops,
         # independently of the dataset.
         # E.g "GroupKFold", "LeaveOneOut", "LeaveOneGroupOut", etc.
@@ -206,11 +239,11 @@ def run_model_selection(X, y, model, p_grid={}, n_trials=30, scoring='roc_auc', 
         # Nested CV with parameter optimization
         nested_score = cross_val_score(clf, X=X, y=y, cv=outer_cv, scoring=scoring)
         nested_scores[i] = nested_score.mean()
-        best_params[i] = clf.best_params_
+        params[i] = clf.best_params_
 
     score_difference = non_nested_scores - nested_scores
 
-    print("Average difference of {:6f} with std. dev. of {:6f}."
+    print("[model_selection] Average difference of {:6f} with std. dev. of {:6f}."
           .format(score_difference.mean(), score_difference.std()))
 
     if plot_: 
@@ -230,14 +263,14 @@ def run_model_selection(X, y, model, p_grid={}, n_trials=30, scoring='roc_auc', 
 
         # Plot bar chart of the difference.
         plt.subplot(212)
-        difference_plot = plt.bar(range(n_trials), score_difference)
+        difference_plot = plt.bar(range(n_runs), score_difference)
         plt.xlabel("Individual Trial #")
         plt.legend([difference_plot],
                    ["Non-Nested CV - Nested CV Score"],
                    bbox_to_anchor=(0, 1, .8, 0))
         plt.ylabel("score difference", fontsize="14")
 
-        if save: 
+        if save_plot: 
             from utils_plot import saveFig
             if not output_path: output_path = os.path.join(os.getcwd(), 'analysis')
             if not os.path.exists(output_path) and create_dir:
@@ -246,9 +279,11 @@ def run_model_selection(X, y, model, p_grid={}, n_trials=30, scoring='roc_auc', 
 
             if output_file is None: 
                 classifier = 'DT'
-                name = 'ModelSelect-{}'.format(classifier)
-                suffix = n_trials 
-                output_file = '{prefix}.P-{suffix}-{index}.{ext}'.format(prefix=name, suffix=suffix, index=index, ext=ext)
+                name = 'ModelSelect-{}'.format(classifier) 
+                if meta: 
+                    output_file = '{prefix}.E-{suffix}.{ext}'.format(prefix=name, suffix=meta, ext=ext)
+                else:
+                    output_file = '{prefix}.{ext}'.format(prefix=name, ext=ext)
 
             output_path = os.path.join(output_path, output_file)  # example path: System.analysisPath
 
@@ -257,17 +292,9 @@ def run_model_selection(X, y, model, p_grid={}, n_trials=30, scoring='roc_auc', 
         else: 
             plt.show()
         
-    return best_params, nested_scores
-
-# convenient wrapper for DT classifier 
-def classify(X, y, params={}, random_state=0, **kargs): 
-    assert isinstance(params, dict)
-    info_gain_measure = kargs.get('criterion', 'entropy')
-    model = DecisionTreeClassifier(criterion=info_gain_measure, random_state=random_state)
-    if len(params) > 0: model = model.set_params(**params)
-    model.fit(X, y)
-
-    return model
+    best_index = np.argmax(nested_scores)
+    best_params = params[best_index]
+    return best_params, params, nested_scores
 
 def eval_performance(X, y, model=None, cv=5, random_state=53, **kargs):
     """
@@ -322,123 +349,6 @@ def eval_performance(X, y, model=None, cv=5, random_state=53, **kargs):
 
     return cv_scores
 
-
-def analyze_path(X, y, model=None, p_grid={}, feature_set=[], n_trials=100, n_trials_ms=10, 
-                    save_ms=False, save_dt_vis=True, 
-                        output_path='', output_file='', 
-                             create_dir=True, index=0, **kargs):
-    """
-
-    Given the training data (X, y) and a tree-based model (e.g. Decision Tree), 
-    train the model and analyze its decision paths (i.e. sequence of variables 
-    served as split points from the root to the leaf): 
-
-       1) count the occurrences of decision paths
-
-    """
-    # from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor 
-    from sklearn.model_selection import train_test_split # Import train_test_split function
-    from utils_tree import visualize, count_paths, count_paths2, count_features2
-    import time
-    
-    #### parameters ####
-    test_size = kargs.get('test_size', 0.2) # save
-    verbose = kargs.get('verbose', 0)
-    merge_labels = kargs.get('merge_labels', True)
-    policy_count = kargs.get('policy_counts', 'standard') # options: {'standard', 'sample-based'}
-    experiment_id = kargs.get('experiment_id', 'test') # a file ID for the output (e.g. example decision tree)
-    validate_tree = kargs.get('validate_tree', True)
-    plot_dir = kargs.get('plot_dir', plotDir)
-    plot_ext = kargs.get('plot_ext', 'tif')
-    to_str = kargs.get('to_str', False)  # if True, decision paths are represented by strings (instead of tuples)
-    ####################
-    
-    labels = np.unique(y)
-    N, Nd = X.shape
-    
-    if len(feature_set) == 0: feature_set = ['f%s' % i for i in range(Nd)]
-        
-    msg = ''
-    if verbose > 1: 
-        msg += "(analyze_path) dim(X): {} | vars (n={}):\n...{}\n".format(X.shape, len(feature_set), feature_set)
-        msg += "... class distribution: {}\n".format(collections.Counter(y))
-    print(msg)
-
-    # define model 
-    if model is None: model = DecisionTreeClassifier(criterion='entropy', random_state=time.time())
-    
-    # run model selection 
-    if len(p_grid) > 0: 
-        best_params, nested_scores = \
-            run_model_selection(X, y, model, p_grid=p_grid, n_trials=n_trials_ms, output_path=output_path, ext=plot_ext, save=save_ms)
-        the_index = np.argmax(nested_scores)
-        the_params = best_params[np.argmax(nested_scores)]
-        # print('> type(best_params): {}:\n{}\n'.format(type(best_params), best_params))
-    print("(analyze_path) Model selection complete > best params: {}  #".format(the_params))
-        
-    # initiate data structures 
-    paths = {}
-    lookup = {}
-    counts = {f: [] for f in feature_set} # maps features to lists of thresholds
-        
-    # build N different decision trees and compute their statistics (e.g. performance measures, decision path counts)
-    metric_opt = ['auc', 'fmax', 'accuracy']
-    scores = {m: [] for m in metric_opt}
-    test_points = np.random.choice(range(n_trials), 1)
-    for i in range(n_trials): 
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=i) # 70% training and 30% test
-        # print("[{}] dim(X_test): {}".format(i, X_test.shape))
-
-        # [todo]: how to reset a (trained) model? 
-        model = classify(X_train, y_train, params=the_params, random_state=i)
-        
-        # [test]
-        if i in test_points: 
-            if verbose: print("... building {} versions of the model: {}".format(n_trials, model.get_params()) )
-            if validate_tree: 
-                file_prefix = "{id}-{index}".format(id=experiment_id, index=i)
-                graph = visualize(model, feature_set, labels, file_name=file_prefix, ext='tif', save=save_dt_vis)
-                
-                # display the tree in the notebook
-                # Image(graph.create_png())  # from IPython.display import Image
-        
-        y_pred = model.predict(X_test)
-        accuracy = metrics.accuracy_score(y_test, y_pred)
-        auc_score = metrics.roc_auc_score(y_test, y_pred)
-        fmax_score = common.fmax_score(y_test, y_pred, beta = 1.0, pos_label = 1)
-        fmax_score_negative = common.fmax_score(y_test, y_pred, beta = 1.0, pos_label = 0)
-        if i % 10 == 0: 
-            print("[{}] Accuracy: {}, AUC: {}, Fmax: {}, Fmax(-): {}".format(i, accuracy, auc_score, fmax_score, fmax_score_negative))
-        scores['auc'].append(auc_score)
-        scores['fmax'].append(fmax_score)
-        scores['accuracy'].append(accuracy)
-
-        if not isinstance(X_test, np.ndarray): X_test = X_test.values   
-            
-        # --- count paths ---
-        #    method A: count number of occurrences of decision paths read off of the decision tree
-        #    method B: sample-based path counts
-        #              each X_test[i] has its associated decision path => 
-        #              in this method, we count the number of decision paths wrt the test examples
-        if policy_count.startswith('stand'): # 'standard'
-            paths, _ = \
-                count_paths(model, feature_names=feature_set, paths=paths, # count_paths, 
-                            merge_labels=merge_labels, to_str=to_str, verbose=verbose, index=i)
-        else:  # 'full'
-            paths, _ = \
-                count_paths2(model, X_test, feature_names=feature_set, paths=paths, # counts=counts, 
-                             merge_labels=merge_labels, to_str=to_str, verbose=verbose)
-            
-        # keep track of feature usage in terms of thresholds at splitting points
-        counts = count_features2(model, feature_names=feature_set, counts=counts, labels=labels, verbose=True)
-        # ... counts: feature -> list of thresholds (used to estimate its median across decision paths)
-
-        # visualization?
-    ### end foreach trial 
-    print("\n(analyze_path) E[acc]: {}, E[AUC]: {}, E[fmax]: {} | n_trials={}".format(
-        np.mean(scores['accuracy']), np.mean(scores['auc']), np.mean(scores['fmax']), n_trials))
-            
-    return paths, counts
 
 ### I/O Utilities ###
 
@@ -668,90 +578,6 @@ def det_cardinality(df, **kargs):
                     adict[col] = len(np.unique(values))
     return adict
 
-def runWorkflow(X, y, features, model=None, param_grid={}, **kargs):
-    """
-
-    Memo
-    ----
-    1. This is a modified version of exposure_analyzer.runWorkflow() to allow for arbitrary (X, y)
-    """
-    def summarize_paths(paths, topk=10):
-        labels = np.unique(list(paths.keys()))
-    
-        print("\n> 1. Frequent decision paths by labels (n={})".format(len(labels)))
-        sorted_paths = sort_path(paths, labels=labels, merge_labels=False, verbose=True)
-        for label in labels: 
-            print("... Top {} paths (@label={}):\n{}\n".format(topk, label, sorted_paths[label][:topk]))
-            
-        print("> 2. Frequent decision paths overall ...")
-        sorted_paths = sort_path(paths, labels=labels, merge_labels=True, verbose=True)
-        print("> Top {} paths (overall):\n{}\n".format(topk, sorted_paths[:topk]))
-
-        return
-    def summarize_vars(X, y): 
-        counts = collections.Counter(y)
-        print("... class distribution | classes: {} | sizes: {}".format(list(counts.keys()), counts))
-
-    from data_processor import load_data
-    from utils_tree import visualize, sort_path
-    import operator
-
-    verbose = kargs.get('verbose', 1)
-    file_prefix = kargs.get('experiment_id', 'loinc_predict_v0')
-    n_runs_ms = kargs.get('n_runs_ms', 10)
-    n_trials = kargs.get('n_trials', 10)
-    save_plot = kargs.get('save_plot', True)
-    ######################################################
-    
-    counts = {}
-
-    # Define model (e.g. decision tree)
-    if not model: 
-        if verbose: print("(runWorkflow) Define model (e.g. decision tree and its parameters) ...")
-        if not param_grid:  # p_grid
-            ######################################################
-            # ... min_samples_leaf: the minimum number of samples required to be at a leaf node. 
-            #     A split point at any depth will only be considered if it leaves at least 
-            #     min_samples_leaf training samples in each of the left and right branches
-            param_grid = {"max_depth": [3, 4, 5, 8, 10, 15], 
-                          "min_samples_leaf": [1, 5, 10, 15, 20]}
-
-        model = DecisionTreeClassifier(criterion='entropy', random_state=1)
-
-        ###################################################### 
-        test_size = 0.3
-        rs = 53
-        topk = 10
-        topk_vars = 10
-        ######################################################
-        labels = [str(l) for l in sorted(np.unique(y))]
-
-        # X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=rs) # 70% training and 30% test
-
-        # params = {'max_depth': 5}  # use model selection to determine the optimal 'max_depth'
-        # model = classify(X_train, y_train, params=params, random_state=rs)
-        # graph = visualize(model, features, labels=labels, plot_dir=plotDir, file_name=file_prefix, ext='tif')
-
-        # 4. analyze decision paths and keep track of frequent features
-        paths, counts = \
-             analyze_path(X, y, model=model, p_grid=param_grid, feature_set=features, n_trials=n_trials, n_trials_ms=n_runs_ms, 
-                            save_ms=False, save_dt_vis=True,  
-                            merge_labels=False, policy_count='standard', experiment_id=file_prefix,
-                               create_dir=True, index=0, validate_tree=False, to_str=True, verbose=False)
-
-        summarize_paths(paths, topk=topk)
-
-        # for k, ths in counts.items(): 
-        #     assert isinstance(ths, list), "{} -> {}".format(k, ths)
-    if counts: 
-        msg = "(runWorkflow) Count feature usage (applicable for tree-based methods e.g. decision tree) ...\n"
-        fcounts = [(k, len(ths)) for k, ths in counts.items()]
-        sorted_features = sorted(fcounts, key=lambda x: x[1], reverse=True)
-        msg += "> Top {} features:\n{}\n".format(topk_vars, sorted_features[:topk_vars])
-        print(msg)
-
-    return model
-
 def one_vs_all_encoding(df, target_label, codebook={'pos': 1, 'neg': 0}, col='test_result_loinc_code', col_target='target'): 
     # inplace operation
     
@@ -880,6 +706,25 @@ def stratify(df, col='test_result_loinc_code', ascending=False):
     ds = sorted(ds.items(), key=operator.itemgetter(1), reverse=not ascending)
     
     return ds
+
+def balance_by_downsampling2(df, cols_x=[], cols_y=[], method='medican', majority_max=3, verify=1):
+    from data_processor import toXY
+    
+    dim0 = df.shape
+    X, y, fset, lset = toXY(df, cols_x=cols_x, cols_y=cols_y, scaler=None, perturb=False)
+    X, y = balance_by_downsampling(X, y, method=method, majority_max=majority_max)
+
+    # reassemble 
+    dfX = DataFrame(X, columns=fset)
+    dfY = DataFrame(y, columns=lset)
+    df = pd.concat([dfX, dfY], axis=1)
+
+    if verify: 
+        print("(balance_by_downsampling2) dim(df): {} -> {}".format(dim0, df.shape))
+        assert df.shape[1] == dim0.shape[1]
+        assert df.shape[0] <= dim0.shape[0]
+
+    return df
 
 def balance_by_downsampling(X, y, method='median', majority_max=3): 
     """

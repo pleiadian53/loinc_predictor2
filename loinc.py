@@ -353,7 +353,122 @@ class FeatureSet(object):
     def get_targets(): 
         return FeatureSet.target_cols
 
+    @staticmethod
+    def join_names(cols, sep='_'):
+        return sep.join(sorted(set(cols), key=cols.index))
+
+    @staticmethod
+    def join_features(fsets, suffix_set=[]): 
+        ns = len(suffix_set)
+        if ns > 0: assert ns == len(fsets)
+        fsets2 = []
+        for i, fset in enumerate(fsets): 
+            if len(suffix_set[i]) > 0: 
+                fsets2.append(["{}_{}".format(v, suffix_set[i]) for v in fset])
+            else: 
+                fsets2.append(fset)
+        fsets = fsets2
+        return np.hstack(fsets)
+
+    @staticmethod
+    def to_age(df, col='patient_date_of_birth', new_col='age', add_new_col=True, throw_=False, default_val=None):
+        if not col in df.columns: 
+            msg = "Error: Missing {}".format(col)
+            if throw_: raise ValueError(msg)
+                
+            # noop
+            return df 
+        import datetime
+        now = datetime.datetime.now()
+        
+        # date_of_path is rarely NaN but it happens
+        if default_val is None: default_val = int(df[col].mean())
+        df[col].fillna(value=default_val, inplace=True)
+        
+        df[new_col] = df[col].apply(lambda x: now.year-int(x))
+        if add_new_col: 
+            pass
+        else: 
+            df.drop(col, axis=1, inplace=True)
+        return df
+
 ### end class FeatureSet
+
+class MatchmakerFeatureSet(FeatureSet): 
+
+    matching_cols = [
+        'test_order_name',  # n_uniq=20039
+        'test_result_name',  # n_uniq=15581    # <<<< 
+        'test_result_range',   # n_uniq=151, mostly missing   # <<<< 
+        'test_result_units_of_measure',  # n_uniq=669, m=40%+
+        'test_result_reference_range',  # n_uniq=5735, moderate missing
+        'test_result_comments',  # mostly missing > 80%   # <<<< 
+        'panel_order_name',  # n_uniq=11663
+        'medivo_test_result_type',  # n_uniq=696/(n=67079,N=71224 | r_miss=5.82%) <<<<
+
+        # need to also include the label column (y)
+        # 'test_result_loinc_code', 
+
+    ]
+    # ... these are the candidate features used to match with LOINC descriptors
+
+    cat_cols = [
+                # 'patient_gender', 
+                # 'patient_state',  # n_uniq=199
+                # 'patient_bill_type',  # n_uniq=31
+                # 'fasting',   # n_uniq=5
+                
+                # ---------------------------------
+                'test_result_status', # n_uniq=144
+                # 'test_turnaround_time', # n_uniq=417, high missing
+                
+                'test_order_code',  # n_uniq=27668
+                
+                'test_result_code', # n_uniq=23731 (2771052/2891340)
+                'test_result_value',  # n_uniq=35441    # <<<< 
+                
+                'test_result_abnormal_flag',  # n_uniq=524, high missing
+                
+                'test_cpt_code',    # n_uniq=655
+                
+                # 'panel_order_code',  # n_uniq=18018
+                
+                'meta_sender_name',  #  n_uniq=7, m=0% # <<< 
+                # ... values: ['Athena' 'Saturn' 'Apollo' 'Poseidon' 'Zeus' 'Plutus' 'Ares']
+            
+                ]
+
+    cont_cols = ['age',   # patient_date_of_birth -> age  # <<< 
+         ] 
+
+    target_cols = ['test_result_loinc_code', ] # label(s) in the source data
+    matching_target_cols = ['label', ]  # the label for the matchmaker dataset
+
+    derived_cols = ['count']  # other possible vars: test result n-th percentile, normalized test frequency
+
+    high_card_cols = list(set(cat_cols)-set(FeatureSet.low_card_cols)-set(matching_cols))
+
+    @staticmethod
+    def categorize_features(ts, remove_prefix=True): 
+        matching_cols = MatchmakerFeatureSet.matching_cols
+        if remove_prefix: 
+            new_cols = []
+            for i, col in enumerate(matching_cols): 
+                new_cols.append(col.replace("test_", ""))
+            matching_cols = new_cols
+            
+        matching_cols = tuple(matching_cols)
+        matching_vars = [col for col in ts.columns if col.startswith(matching_cols)]
+
+        target_vars = MatchmakerFeatureSet.matching_target_cols
+        derived_vars = MatchmakerFeatureSet.derived_cols
+
+        V = list(ts.columns)
+        regular_vars = sorted(set(V)-set(matching_vars)-set(target_vars)-set(derived_vars), key=V.index)
+
+        return (matching_vars, regular_vars, target_vars)
+
+### End class MatchmakerFeatureSet
 
 #########################################################################
 # I/O utilities 
@@ -882,6 +997,12 @@ def demo_feature_naming(**kargs):
         cols = LoincTSet.get_sdist_mapped_col_names(dtype, metrics=['LV', 'JW'], throw=True)
         colm.extend( cols )
         print("> mapped    | [{}] {}".format(dtype, cols))
+
+    print("(demo) Joining feature sets with suffices that rename these features to prevent from duplicate feature names")
+    joined_set = FeatureSet.join_features([['fa', 'fb', 'fc'], ['fb', 'fc', 'fd']], suffix_set=['', 'y', ])
+    print("... joined set:\n{}\n".format(joined_set))
+
+    return 
 
 def test(**kargs): 
 

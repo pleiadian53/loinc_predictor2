@@ -15,6 +15,7 @@ import pandas as pd
 
 from tabulate import tabulate
 from utils_plot import saveFig
+from utils_sys import sample_dict
 """
 
 
@@ -479,6 +480,7 @@ def t_vis_tree(dtree):
 
 def t_classification(): 
     from sklearn.tree import DecisionTreeClassifier    # Import decision tree classifier model
+    
 
     tree = DecisionTreeClassifier(criterion='entropy', # Initialize and fit classifier
         max_depth=4, random_state=1)

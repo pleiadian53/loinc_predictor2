@@ -26,11 +26,16 @@ def encode_vars_via_lookup(fset, feature_lookup):
             dfX = encoder.fit_transform(dfX, dfy)
     return dfX
             
+def encode_vars0(dfX, fset, high_card_cols=[], dfy=None, verbose=1): 
+    # import category_encoders as ce
+    dfX, _ = encode_vars(dfX, fset, high_card_cols=high_card_cols, dfy=dfy, verbose=verbose)
+    return dfX
+
 def encode_vars(dfX, fset, high_card_cols=[], dfy=None, verbose=1): 
     # import category_encoders as ce
 
     low_card_cols = list(set(fset)-set(high_card_cols))
-    if verbose: print("(encoder_vars) low card vars (n={}):\n{}\n ... high card vars (n={}):\n{}\n".format(
+    if verbose: print("(encoder_vars2) low card vars (n={}):\n{}\n ... high card vars (n={}):\n{}\n".format(
         low_card_cols, len(low_card_cols), high_card_cols, len(high_card_cols)))
     
     n_trans = 0
@@ -53,7 +58,8 @@ def encode_vars(dfX, fset, high_card_cols=[], dfy=None, verbose=1):
             else: 
                 dfX = encoder.fit_transform(dfX)
     assert n_trans > 0
-    return dfX
+
+    return dfX, encoder
 
 def categorify(df, cat_cols, cont_cols=[],  verbose=1): 
     for cat in cat_cols:

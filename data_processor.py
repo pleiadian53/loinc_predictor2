@@ -324,8 +324,15 @@ def group_by(df, cols=['test_result_code', 'test_result_name',], verbose=1, n_sa
     return adict
 
 def toXY(df, cols_x=[], cols_y=[], untracked=[], **kargs): 
-    
+    import common 
+
     verbose = kargs.get('verbose', 1)
+
+    # optional operations
+    tPerturb = kargs.get('perturb', False)
+    scaler = kargs.pop('scaler', None) # used when scaler is not None (e.g. "standardize")
+    lower_bound = kargs.pop('lower_bound', 0) # used perturb is True
+    alpha = kargs.pop('alpha', 100.0) # used when perturb is True
     
     X = y = None
     if len(untracked) > 0: 
@@ -338,35 +345,36 @@ def toXY(df, cols_x=[], cols_y=[], untracked=[], **kargs):
         y = df[cols_y].values
 
     else: 
-        assert len(cols_y) > 0 
-        cols_x = list(df.drop(cols_y, axis=1).columns)
-        X = df[cols_x].values
-        y = df[cols_y].values
-
-    # optional operations
-    scaler = kargs.get('scaler', None)
-    if scaler is not None: 
-        if verbose: print("(toXY) Scaling X using method={}".format(scaler))
-        from sklearn import preprocessing
-
-        if isinstance(scaler, str): 
-            if scaler.startswith('standard'): 
-                std_scale = preprocessing.StandardScaler().fit(X)
-                X = std_scale.transform(X)
-            elif scaler.startswith(('normalize', 'minmax')): 
-                minmax_scale = preprocessing.MinMaxScaler().fit(X)
-                X = minmax_scale.transform(X)
+        if len(cols_y) > 0:
+            cols_x = list(df.drop(cols_y, axis=1).columns)
+            X = df[cols_x].values
+            y = df[cols_y].values
         else: 
-            try: 
-                X = scaler.transform(X)
-            except Exception as e: 
-                msg = "(toXY) Invalid scaler: {}".format(e)
-                raise ValueError(msg)
+            if verbose: 
+                print("(toXY) Both cols_x and cols_y are empty => Assuming all attributes are variables (n={})".format(df.shape[1]))
+            X = df.values
+            y = None
+
+    if tPerturb: 
+        # perturb the matrix a bit
+        X = common.perturb(X, lower_bound=lower_bound, alpha=alpha)
+
+    if scaler is not None:
+        if verbose: print("(toXY) Scaling X using method:\"{}\"".format(scaler))
+        X = common.scale(X, scaler=scaler, **kargs)
     
     # return (X, y, z, cols_x, cols_y)
     return (X, y, cols_x, cols_y)
 
 def down_sample(df, col_label='label', n_samples=-1):
+    """
+
+    Related
+    -------
+    analyzer.balance_by_downsampling()
+    
+    """
+
     labelCounts = dict(df[col_label].value_counts())
     labelSorted = sorted(labelCounts, key=labelCounts.__getitem__, reverse=True)
     max_label, min_label = labelSorted[0], labelSorted[-1]

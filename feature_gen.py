@@ -11,7 +11,7 @@ from sklearn.base import BaseEstimator, ClassifierMixin
 
 # local modules 
 import loinc
-from loinc import LoincTable, LoincTSet
+from loinc import LoincTable, LoincTSet, FeatureSet, MatchmakerFeatureSet
 from loinc_mtrt import LoincMTRT
 import loinc_mtrt as lmt
 
@@ -21,11 +21,12 @@ import language_model as langm
 import config
 
 import common, text_processor
-from text_processor import process_text
+from text_processor import process_text, process_string
 from CleanTextData import standardize 
 
 import feature_gen_tfidf as fg_tfidf
 import feature_gen_sdist as fg_sdist
+
 
 def build_tfidf_model(cohort='hepatitis-c', df_src=None, target_cols=[], **kargs):
     """
@@ -84,7 +85,93 @@ def build_tfidf_model(cohort='hepatitis-c', df_src=None, target_cols=[], **kargs
 
     return model
 
-def feature_transform(df, **kargs): 
+def partition(df, verbose=1):
+    matching_cols = MatchmakerFeatureSet.matching_cols
+    cat_cols = MatchmakerFeatureSet.cat_cols
+    cont_cols = MatchmakerFeatureSet.cont_cols
+    derived_cols = MatchmakerFeatureSet.derived_cols
+    target_cols = MatchmakerFeatureSet.target_cols
+    high_card_cols = MatchmakerFeatureSet.high_card_cols
+
+    # reg_vars_cols = cont_cols + cat_cols  # + derived_cols (e.g. count)
+    # ... probably need to infer cols(X) because df may be a transformed dataframe
+    V = list(df.columns)
+    vars_cols = sorted(set(V)-set(matching_cols)-set(target_cols)-set(derived_cols), key=V.index)
+
+    dfM = df[matching_cols]
+    dfX = df[vars_cols]
+    dfY = df[target_cols]
+
+    if verbose: 
+        print("(partition) {} matching vars | {} reg vars | {} label vars".format(dfM.shape[1], dfX.shape[1], dfY.shape[1]))
+        # [log]  8 matching vars | 70 reg vars | 1 label vars
+
+    return (dfM, dfX, dfY)
+
+def tranform_and_encode(df, fill_missing=True, token_default='unknown', 
+        drop_high_missing=False, pth_null=0.9, verbose=1):
+    from analyzer import col_values
+    from transformer import encode_vars 
+
+    # matchmaker features 
+    matching_cols = MatchmakerFeatureSet.matching_cols
+    cat_cols = MatchmakerFeatureSet.cat_cols
+    cont_cols = MatchmakerFeatureSet.cont_cols
+    target_cols = MatchmakerFeatureSet.target_cols
+    high_card_cols = MatchmakerFeatureSet.high_card_cols
+
+    # --- transform variables
+    MatchmakerFeatureSet.to_age(df)
+    values = col_values(df, col='age', n=10)
+    print("[transform] age: {}".format(values))
+
+    V = cont_cols + cat_cols  # + derived_cols (e.g. count)
+    L = target_cols
+    dfM = df[matching_cols]
+    dfX = df[V]
+    dfY = df[L]
+
+    if fill_missing:  
+        # dfM.fillna(value=token_default, inplace=True)
+        # ... don't fill missing values for dfM here!
+
+        dfX.fillna(value=token_default, inplace=True)
+
+    if drop_high_missing: 
+        # drop columns/vars with too many missing values 
+        N = dfX.shape[0]
+        n_thresh = int(N * pth_null)
+        nf0 = nf = dfX.shape[1]
+        fset0 = set(dfX.columns.values)
+
+        dfX = dfX[dfX.columns[dfX.isnull().mean() < pth_null]]
+        fset = set(dfX.columns.values)
+        nf = dfX.shape[1]
+        print("[transform] Dropped n={} features:\n{}\n".format(nf-nf0, fset0-fset))
+
+    dim0 = dfX.shape
+    dfX, encoder = encode_vars(dfX, fset=cat_cols, high_card_cols=high_card_cols)
+    if verbose: 
+        print("[encode] dim(dfX-): {}, dim(dfX+): {}".format(dim0, dfX.shape))
+        # [log] ... [encode] dim(dfX-): (64979, 13), dim(dfX+): (64979, 97)
+
+    return (dfM, dfX, dfY, encoder)
+
+def regular_feature_transform(df, **kargs):
+    tDropHighMissing = kargs.get('drop_high_missing', False)
+    pth_null = kargs.get("pth_null", 0.9)  # threshold of null-value proportion to declare a "high missing rate"
+    verbose = kargs.get('verbose', 1)
+    token_default = kargs.get("token_default", LoincTSet.token_default)
+
+    N0, Nv0 = df.shape
+    dfM, dfX, dfY, _ = tranform_and_encode(df, fill_missing=True, token_default=token_default, 
+                        drop_high_missing=tDropHighMissing, pth_null=pth_null)
+    df = pd.concat([dfM, dfX, dfY], axis=1)
+    assert df.shape[0] == N0
+    if verbose: highlight("[transform] dim of vars: {} -> {}".format(Nv0, df.shape[1]))
+    return df
+
+def text_feature_transform(df, **kargs): 
     """
     Convert T-attributes into the following sets of features
       1) Similarity scores between TF-IDF transformed T-attributes and the LOINC descriptors
@@ -128,24 +215,29 @@ def feature_transform(df, **kargs):
         else: 
             print("... No doc found!")
         return df
-    def show_evidence(row, code_neg=None, sdict={}, print_=False, min_score=0.0):
+    def show_evidence(row, code, code_neg=None, sdict={}, print_=False, min_score=0.0, label='?'):
         # sdict: T-attribute -> Loinc descriptor -> score
-
+         
         code = row[LoincTSet.col_code]
-        msg = "(show_evidence) code: {}\n".format(code)
-        if code_neg is not None:
-            msg = "(show_evidence) {} ->? {}\n".format(code, code_neg) 
-            # ... the input code could be re-assigned to the code_neg
+        code_x = code   # Target code's corresponding T-attributes are to be matched against 
 
+        msg = "(evidence) Found matching signals for code(+): {} (target aka \"reliable\" positive)\n".format(code)
+        if code_neg is not None:
+            msg = "(hypothesis) Found matching signals when {}(+) -> {}(-)?\n".format(code, code_neg) 
+            # ... the input code could be re-assigned to the code_neg
+            label = '-'
+            code_x = code_neg
+        print("(debug) code_x: {}".format(code_x))
         for col, entry in sdict.items(): 
-            msg += "... {}: {} ~ \n".format(col, row[col])  # a T-attribute and its value
-            for col_loinc, score in entry.items():
+            msg += "... {}: {}\n".format(col, row[col])  # a T-attribute and its value
+            for col_loinc, score in entry.items():  # how does the current row's T attributes compared to the LOINC code's descriptors?
                 if score > min_score: 
-                    msg += "    + {}: {} => score: {}\n".format(col_loinc, loinc_lookup[code][col_loinc], score)
+                    msg += "... {}: {} => score: {} | {}({})\n".format(col_loinc, 
+                        process_string(loinc_lookup[code_x][col_loinc]), score, code_x, label)
         if print_: print(msg)
         return msg
-
     from analyzer import load_src_data
+    from data_processor import toXY
 
     # --- LOINC table attributes
     col_ln, col_sn = LoincTable.long_name, LoincTable.short_name
@@ -172,11 +264,19 @@ def feature_transform(df, **kargs):
     # --- TF-IDF specific 
     ngram_range = kargs.get('ngram_range', (1,3))
     max_features = kargs.get('max_features', 50000)
+    model = kargs.get("tfidf_model", None)
 
     # --- Data specific 
     tGenNegative = kargs.get('gen_negative', True)
     n_per_code = kargs.get("n_per_code", 3)
-        
+    tDropHighMissing = kargs.get('drop_high_missing', False)
+    tAddRegularVars = kargs.get('add_regular_vars', False)
+
+    # --- transform, encode and separate matchmaking variables
+    dfM, dfX, dfY = partition(df)
+    df = pd.concat([dfM, dfY], axis=1)
+    # ... df: redefined to only include matchmaking variables + target (e.g. LOINC code)
+
     # --- Define matching rules
     ######################################
     print("[transform] The following T-attributes are to be compared with LOINC descriptors:\n{}\n".format(target_cols))
@@ -197,7 +297,8 @@ def feature_transform(df, **kargs):
         #                   }
     ######################################
     # default to use all LOINC codes associatied with the given cohort as the source of training corpus
-    model = build_tfidf_model(cohort=cohort, df_src=df_src, target_cols=target_cols, ngram_range=ngram_range, max_features=max_features)
+    if model is None: 
+        model = build_tfidf_model(cohort=cohort, df_src=df_src, target_cols=target_cols, ngram_range=ngram_range, max_features=max_features)
     # note: if df_src is given, cohort is ignored
 
     # note that df_src is the source used to generate the corpus
@@ -239,6 +340,7 @@ def feature_transform(df, **kargs):
     neg_instances = []
     attributes = []
     N0 = df.shape[0]
+    feature_suffices = ['sdist', 'tfidf', ] # has to be in accordance with compute_similarity_with_loinc()
     for code, dfc in df.groupby([LoincTSet.col_code, ]):
         n_codes += 1
 
@@ -247,7 +349,8 @@ def feature_transform(df, **kargs):
         if not code in loinc_lookup: 
             codes_missed.add(code)
 
-        for r, row in dfc.iterrows():
+        # indices = dfc.index.values
+        for r, row in dfc.iterrows():   # r ~ df.index
             # ... remember that each LOINC may have n>1 instances but with different combinations of T-attributes
             
             if code in loinc_lookup: 
@@ -271,14 +374,23 @@ def feature_transform(df, **kargs):
                             target_cols=target_cols, target_descriptors=target_descriptors) # target_descriptors
 
                 # --- Other models 
+                row_X = dfX.iloc[r]   # df now does not have the same index as dfX
+                sv3 = row_X.values
+                attr3 = dfX.columns.values
 
-                if len(attributes) == 0: attributes = np.hstack([attr1, attr2])
-                sv = np.hstack([sv1, sv2])
+                if len(attributes) == 0: 
+                    # attributes = np.hstack([attr1, attr2])
+                    attributes = FeatureSet.join_features([attr1, attr2], feature_suffices)
+                    print("[transform] (before) feature set (n={}):\n{}\n".format(len(attributes), attributes))
+                    if tAddRegularVars: attributes = np.hstack([attr3, attributes])
+                    print("[transform] (after)  feature set (n={}):\n{}\n".format(len(attributes), attributes))
+
+                sv = np.hstack([sv1, sv2, sv3]) if tAddRegularVars else np.hstack([sv1, sv2])
                 pos_instances.append(sv)  # sv: a vector of similarity scores
 
                 #########################################################################
                 if verify: 
-                    named_scores = named_scores2
+                    named_scores = named_scores1
                     # positive_scores = defaultdict(dict)  # collection of positive sim scores, representing signals
                     tHasSignal = False
                     msg = f"[{r}] Code(+): {code}\n"
@@ -296,10 +408,10 @@ def feature_transform(df, **kargs):
                                 tHasSignal = True
                     # ------------------------------------------------
                     if not tHasSignal: 
-                        msg += "    + No similar properties found between {} and {} #\n".format(target_cols, target_descriptors)
+                        msg += "... Code(+): {} | No similar properties found between row attributes: {} and its LOINC dpt: {} #\n".format(code, target_cols, target_descriptors)
                         print(msg)
                     if tHasSignal: 
-                        highlight(show_evidence(row, sdict=named_scores, print_=False), symbol='#')
+                        highlight(show_evidence(row, code=code, sdict=named_scores, print_=False), symbol='#')
                 #########################################################################
 
                 if not tGenNegative: 
@@ -329,13 +441,18 @@ def feature_transform(df, **kargs):
 
                                     # subsumed by matching_rules
                                     target_cols=target_cols, target_descriptors=target_descriptors) # target_descriptors
+ 
+                        # --- Other models 
+                        row_X = dfX.iloc[r]   # df now does not have the same index as dfX
+                        sv3 = row_X.values
+                        attr3 = dfX.columns.values
                         
-                        sv = np.hstack([sv1, sv2])
+                        sv = np.hstack([sv1, sv2, sv3]) if tAddRegularVars else np.hstack([sv1, sv2])
                         neg_instances.append(sv)  # sv: a vector of similarity scores
                         
                         # ------------------------------------------------
                         if verify: 
-                            named_scores = named_scores2
+                            named_scores = named_scores1
 
                             tHasSignal = False
                             # positive_scores = defaultdict(dict)
@@ -354,10 +471,10 @@ def feature_transform(df, **kargs):
                                         tHasSignal = True
 
                                 if tHasSignal: 
-                                    msg += "    + Found similar properties between T-attributes(code={}) and negative: {}  ###\n".format(code, code_neg)
+                                    msg += "... Code(-) {} | Found similar properties between T-attributes(code={}) and negative LOINC dpt: {}  ###\n".format(code_neg, code, code_neg)
                                     print(msg)  
                                 if tHasSignal: 
-                                    highlight(show_evidence(row, code_neg=code_neg, sdict=named_scores, print_=False), symbol='#')
+                                    highlight(show_evidence(row, code=code, code_neg=code_neg, sdict=named_scores, print_=False), symbol='#')
                         # ------------------------------------------------
     
     print("... There are n={} codes not found on the LONIC+MTRT corpus table:\n{}\n".format(len(codes_missed), codes_missed))
@@ -410,20 +527,27 @@ def select_loinc_codes_by_category(cohort='hepatitis-c', categories=[]):
     return list(set(candidates) - set(non_codes))
 
 def demo_create_training_data(**kargs):
-    def show_evidence(row, code_neg=None, sdict={}, print_=False, min_score=0.0, label='?'):
+    def show_evidence(row, code, code_neg=None, sdict={}, print_=False, min_score=0.0, label='?'):
         # sdict: T-attribute -> Loinc descriptor -> score
          
         code = row[LoincTSet.col_code]
-        msg = "(evidence) Found matching signals > code: {} ({})\n".format(code, label)
+        code_x = code   # Target code's corresponding T-attributes are to be matched against 
+
+        msg = "(evidence) Found matching signals for code(+): {} (target aka \"reliable\" positive)\n".format(code)
         if code_neg is not None:
-            msg = "(evidence) {} ->? {} (-)\n".format(code, code_neg) 
+            msg = "(hypothesis) Found matching signals when {}(+) -> {}(-)?\n".format(code, code_neg) 
             # ... the input code could be re-assigned to the code_neg
+            label = '-'
+            code_x = code_neg
 
         for col, entry in sdict.items(): 
-            msg += "... {}: {} ~ \n".format(col, row[col])  # a T-attribute and its value
-            for col_loinc, score in entry.items():
+            msg += "... {}: {}\n".format(col, row[col])  # a T-attribute and its value
+            tSignal = False
+            for col_loinc, score in entry.items():  # how does the current row's T attributes compared to the LOINC code's descriptors?
                 if score > min_score: 
-                    msg += "    + {}: {} => score: {}\n".format(col_loinc, process_text(loinc_lookup[code][col_loinc]), score)
+                    msg += "... {}: {} => score: {} | {}({})\n".format(col_loinc, 
+                        process_string(loinc_lookup[code_x][col_loinc]), score, code_x, label)
+                    tSignal = True 
         if print_: print(msg)
         return msg
 
@@ -445,6 +569,14 @@ def demo_create_training_data(**kargs):
     col_mval = LoincMTRT.col_value
     col_mkey = LoincMTRT.col_key       # loinc codes in the mtrt table
 
+    # Data parameters 
+    tAddRegularVars = False
+    tDropHighMissing = True
+
+    # TF-IDF parameters
+    ngram_range = kargs.get('ngram_range', (1,3))
+    max_features = kargs.get('max_features', 50000)
+
     # --- matching rules
     ######################################
     target_cols = ['test_order_name', 'test_result_name', ] # 'test_result_units_of_measure'
@@ -453,8 +585,8 @@ def demo_create_training_data(**kargs):
     target_descriptors = [col_sn, col_ln, col_com, col_sys, ]
 
     # note that sometimes we may also want to compare with MTRT
-    matching_rules = { 'test_order_name': [col_sn, col_ln, col_com, col_sys, ], 
-                       'test_result_name': [col_sn, col_ln, col_com, col_sys, col_prop, ], 
+    matching_rules = { 'test_order_name': [col_sn, col_ln, col_com, ],  # col_sys
+                       'test_result_name': [col_sn, col_ln, col_com,  ], #  col_sys, col_prop
                        # 'test_specimen_type': [col_sys, ], 
                        # 'test_result_units_of_measure': [col_sn, col_prop], }
                        }
@@ -467,21 +599,34 @@ def demo_create_training_data(**kargs):
 
     highlight("(demo) Create training data ... found n={} reliable positives".format(len(codesRP)))
     df_src = load_src_data(cohort=cohort, warn_bad_lines=False, canonicalized=True, processed=False)
+    df_src = regular_feature_transform(df_src, drop_high_missing=False, pth_null=0.9)
+    # ... drop_high_missing only work on non-matchmaking variables
+    # ... todo: load_transform
+    print("(demo) After reg feature transform | cols(df):\n{}\n".format(df_src.columns))
+
     codesAll = df_src[col_target].unique()
     ######################################
 
+    # traing TF-IDF model
+    tfidf_model = build_tfidf_model(cohort=cohort, df_src=df_src, target_cols=target_cols, 
+                        ngram_range=ngram_range, max_features=max_features)
+
     # select just the reliable positive to generate matchmaker's training data
     # ... can deter this step until feature_transform
-    ts = df_src[df_src[col_target].isin(codesRP)] # don't use this
+    ts = df_src.loc[df_src[col_target].isin(codesRP)] # don't use this
     # ts = select_samples_by_loinc(ts, target_codes=codesRP, target_cols=target_cols)
-
+   
     X_train, y_train, attributes = \
-        feature_transform(ts, target_cols=target_cols, df_src=df_src, 
+        text_feature_transform(ts, target_cols=target_cols, df_src=df_src, 
                 matching_rules=matching_rules, 
-                ngram_range=(1, 3), max_features=50000,  # TF-IDF model paramters
+
+                tfidf_model=tfidf_model, 
+                ngram_range=ngram_range, max_features=max_features,  # TF-IDF model paramters
 
                 target_codes=codesRP, 
                 n_per_code=3,
+
+                add_regular_vars=tAddRegularVars
                 # ... generate feature vectors only on these LOINC codes (but redundant here since ts is already filtered accordingly)
                 ) 
 
@@ -500,6 +645,7 @@ def demo_create_training_data(**kargs):
 
     # Output
     # --------------------------------------------------------
+    print("(demo) Saving training data to:\n{}\n".format(output_path))
     ts_train.to_csv(output_path, index=False, header=True)
     # --------------------------------------------------------
 
@@ -512,26 +658,32 @@ def demo_create_training_data(**kargs):
     # select target LOINC codes for the test set
     ts = df_src[df_src[col_target].isin(codesTest)]
     # ts = select_samples_by_loinc(ts, target_codes=codesTest target_cols=target_cols)
-    # ... can deter this step until feature_transform
+    # ... can deter this step until text_eature_transform
 
     X_test, _, _ = \
-        feature_transform(ts, target_cols=target_cols, df_src=df_src, 
+        text_feature_transform(ts, target_cols=target_cols, df_src=df_src, 
                 matching_rules=matching_rules, 
+
+                tfidf_model=tfidf_model,
+                ngram_range=ngram_range, max_features=max_features,  # TF-IDF model paramters
 
                 target_codes=codesTest, 
                 n_per_code=3,
 
                 gen_negative=False, # don't generate negative exmaples
-                ngram_range=(1, 3), max_features=50000,  # TF-IDF model paramters
+                add_regular_vars=tAddRegularVars
 
                 ) 
+    print("(demo) dim(X_test): {}, n(attributes): {}".format(X_test.shape, len(attributes)))
     ts_test = DataFrame(X_test, columns=attributes)
+    ts_test[col_label] = -1 # only a placeholder
 
     output_file = f'matchmaker-test-{cohort}.csv'
     output_path = os.path.join(datadir, output_file)
 
     # Output
     # --------------------------------------------------------
+    print("(demo) Saving test data to:\n{}\n".format(output_path))
     ts_test.to_csv(output_path, index=False, header=True)
     # --------------------------------------------------------
 
@@ -539,9 +691,337 @@ def demo_create_training_data(**kargs):
 
     return (ts_train, ts_test)
 
+def visualize_training_data(ts, **kargs): 
+    def relabel(df, target_cols=[]):
+        if not target_cols: target_cols = df.columns
+
+        # remove prefix
+        new_cols = []
+        for i, col in enumerate(target_cols): 
+            new_cols.append(col.replace("test_", ""))
+        target_cols = new_cols
+
+        new_cols = []
+        loinc_abbrev = LoincTable.cols_abbrev 
+        for i, col in enumerate(target_cols):
+            tFoundMatch = False
+            for name, abbrev in loinc_abbrev.items(): 
+                if col.find(name) >= 0: 
+                    new_cols.append(col.replace(name, abbrev))
+                    print("... {} -> {}".format(col, col.replace(name, abbrev)))
+                    tFoundMatch = True
+                    break
+            if not tFoundMatch: 
+                new_cols.append(col) # new column is the old column
+        target_cols = new_cols
+        
+        return df.rename(columns=dict(zip(df.columns.values, target_cols)))
+
+    import seaborn as sns
+    import matplotlib
+    matplotlib.use('Agg') # use a non-interactive backend such as Agg (for PNGs), PDF, SVG or PS.
+    import matplotlib.pyplot as plt
+
+    # select plotting style; must be called prior to pyplot
+    plt.style.use('seaborn')  # values: {'seaborn', 'ggplot', }  
+    from utils_plot import saveFig
+    # from sklearn import preprocessing
+    from sklearn.decomposition import PCA
+    from sklearn.manifold import TSNE
+    from data_processor import toXY, down_sample
+    from feature_analyzer import plot_heatmap, plot_data_matrix
+
+    plt.clf()
+    
+    tScale = False # set zcore = 1 within clustermap() instead
+    tPerturb = False
+
+    # ---------------------------------------------
+    # sns.set_color_codes("pastel")
+    # sns.set(color_codes=True)
+    n_colors = 256 # Use 256 colors for the diverging color palette
+    # palette = sns.diverging_palette(20, 220, n=n_colors) # Create the palette
+    palette = sns.color_palette("coolwarm", 10)
+    # sns.palplot(sns.color_palette("coolwarm", 7))
+    # sns.palplot(palette)
+    # ---------------------------------------------
+    col_label = kargs.get('col_label', 'label')
+    cohort = kargs.get('cohort', config.cohort)
+    vtype = subject = kargs.get('vtype', 'combined')
+    n_samples = kargs.get('n_samples', 50)
+
+    cols_y = ['label', ]
+    cols_untracked = []
+    # ---------------------------------------------
+
+    # n_samples: limit sample size to unclutter plot 
+    df_match = down_sample(ts, col_label=col_label, n_samples=n_samples)
+    df_match = df_match.sort_values(by=[col_label, ], ascending=True)
+    df_match = relabel(df_match)
+    # ---------------------------------------------
+
+    df_pos = df_match[df_match[col_label]==1]
+    df_neg = df_match[df_match[col_label]==0]
+    highlight("(demo) dim(+): {}, dim(-): {}".format(df_pos.shape, df_neg.shape))
+
+    # -- perturb the negative examples by a small random noise
+    # ep = np.min(df_pos.values[df_pos.values > 0])
+    # df_neg += np.random.uniform(ep/100, ep/10, df_neg.shape)
+    # print("... ep: {} => perturbed df_neg:\n{}\n".format(ep, df_neg.head(10)))
+    # df_match = pd.concat([df_pos, df_neg])
+
+    # ---------------------------------------------
+    # labels = df_match.pop('label')  # this is an 'inplace' operation
+    labels = df_match[col_label]  # labels: a Series
+    n_labels = np.unique(labels.values)
+    # ---------------------------------------------
+
+    lut = {0: "#3933FF", 1: "#FF3368"} # dict(zip(labels.unique(), "rb"))
+    # positive (red): #3933FF, #3358FF, #e74c3c
+    # negative (blue): #FF3368,  #3498db 
+    print("... lut: {}".format(lut))
+    row_colors = labels.map(lut)
+
+    # detect zero vectors
+    df_zeros = df_match.loc[(df_match.T == 0).all()]
+    print("... found n={} zero vectors (which cannot be normalized; troubled in computing cosine, correlation)".format(df_zeros.shape[0]))
+    df_pos_zeros = df_pos.loc[(df_pos.T == 0).all()]
+    df_neg_zeros = df_neg.loc[(df_neg.T == 0).all()]
+    print("... n(pos): {}, n(pos, 0): {}, ratio: {}".format(df_pos.shape[0], df_pos_zeros.shape[0], df_pos_zeros.shape[0]/df_pos.shape[0]))
+    print("... n(neg): {}, n(neg, 0): {}, ratio: {}".format(df_neg.shape[0], df_neg_zeros.shape[0], df_neg_zeros.shape[0]/df_neg.shape[0]))
+
+    # standardize the data
+    print("... col(df_match): {}".format(df_match.columns.values))
+
+    X, y, fset, lset = toXY(df_match, cols_y=cols_y, scaler=None, perturb=False)
+    if tScale:
+        print("... feature set: {}".format(fset))
+
+        X = common.scale(X, scaler='minmax') # standardize ~ z-score, normalize: minmax
+        # df_match = DataFrame(np.hstack([X, y, z]), columns=fset+lset+cols_untracked)
+        dfX = DataFrame(X, columns=fset)
+        # ... don't include y here
+
+        df_zeros = dfX.loc[(dfX.T == 0).all()]
+        print("... After standardization, found n={} zero vectors".format(df_zeros.shape[0]))
+    else: 
+        dfX = df_match.drop(cols_y, axis=1)
+
+    if tPerturb: 
+        X = common.perturb(X, lower_bound=0, alpha=10.)
+    # ... (dfX, X, y, fset, lset)
+
+    #-----------------------------------------
+    # ... test
+    print("... dfX:\n{}\n".format(dfX))
+    # X = common.scale(X, scaler='normalize') # standardize ~ z-score, normalize: minmax
+    y = y.flatten()
+    print("(test) min(X): {}, max(X): {}".format(np.min(X), np.max(X)))
+    print("... dim(X): {}, dim(y): {}".format(X.shape, y.shape))
+    print("... column-wise mean (+):\n{}\n".format(list(zip(fset, np.mean(X[y==1, :], axis=0)))))
+    print("... column-wise mean (-):\n{}\n".format(list(zip(fset, np.mean(X[y==0, :], axis=0)))))
+    print("... column-wise mean (A):\n{}\n".format(list(zip(fset, np.mean(X, axis=0)))))
+    row_mean = np.mean(X, axis=1)
+    print("... n(row-wise 0): {}".format(np.sum(row_mean == 0)))
+    #-----------------------------------------
+
+    highlight("(demo) 1. Plotting dendrogram (on top of heatmap) | dim(dfX): {}...".format(dfX.shape), symbol='#')
+
+    # Normalize the data within the rows via z_score
+    sys.setrecursionlimit(10000)
+    try: 
+        g = sns.clustermap(dfX, figsize=(15, 24.27), z_score=1, row_colors=row_colors, 
+                   cmap='coolwarm', metric='cosine', method='complete')  # z_score=1, standard_scale=1
+    except Exception as e:
+        df_match = filter_features(df_match)
+        dfX = df_match.drop(cols_y, axis=1)
+        g = sns.clustermap(dfX, figsize=(15, 24.27), row_colors=row_colors, 
+                   cmap='coolwarm', metric='cosine', method='complete')  # z_score=1, standard_scale=1
+
+    # ... need to pass dataframe dfX instead of X! 
+    # ... try different cmaps: 'vlag'
+
+    # g.set_xticklabels(g.get_xticklabels(), rotation=45)
+    # print(dir(g.ax_heatmap))
+    plt.setp(g.ax_heatmap.xaxis.get_majorticklabels(), rotation=45)
+    # plt.setp(g.ax_heatmap.secondary_yaxis(), rotation=45)
+    g.ax_heatmap.set_xticklabels(g.ax_heatmap.get_xmajorticklabels(), fontsize=16, fontweight='light')
+    # ... horizontalalignment='right' shifts labels to the left
+    
+    # colors:  cmap="vlag", cmap="mako", cmap=palette
+    # normalization: z_score, stndardize_scale
+
+    output_path = os.path.join(config.plot_dir, f'clustermap-{vtype}-{cohort}.pdf')
+    # g.savefig(output_path, format='pdf', dpi=300, bbox_inches='tight') 
+    saveFig(plt, output_path, dpi=300)
+
+    ################################################
+    # df_match = pd.read_csv(input_path, sep=",", header=0, index_col=None, error_bad_lines=False)
+    df_match = down_sample(ts, col_label=col_label, n_samples=n_samples)
+    df_match = relabel(df_match)
+    df_pos = df_match[df_match[col_label]==1]
+    df_neg = df_match[df_match[col_label]==0]
+    print("... cols(df_pos):\n{}\n".format(df_pos.columns.values))
+    df_pos.drop([col_label, ], axis=1, inplace=True)
+    df_neg.drop([col_label, ], axis=1, inplace=True)
+    # ... no X scaling
+
+    # --- Enhanced heatmap 
+    highlight("(demo) 2. Visualize feature values > (+) examples should have higher feature values, while (-) have low to zero values")
+    output_path = os.path.join(config.plot_dir, f'{vtype}-pos-match-{cohort}.png')
+    plot_data_matrix(df_pos, output_path=output_path, dpi=300)
+
+    output_path = os.path.join(config.plot_dir, f'{vtype}-neg-match-{cohort}.png')
+    plot_data_matrix(df_neg, output_path=output_path, dpi=300)
+
+    #################################################
+    # --- PCA plot 
+
+    plt.clf()
+    highlight("(demo) 3. PCA plot", symbol='#')
+    
+    # X = df_match.drop(cols_y+untracked, axis=1).values
+
+    # read in the data again 
+    # df_match = pd.read_csv(input_path, sep=",", header=0, index_col=None, error_bad_lines=False)
+    df_match = down_sample(ts, col_label=col_label)
+    X, y, fset, lset = toXY(df_match, cols_y=cols_y, scaler='standardize')
+
+    # print("... dim(X): {} => X=\n{}\n".format(X.shape, X))
+    pca = PCA(n_components=2)
+    pca_result = pca.fit_transform(X)
+    df_match['pca1'] = pca_result[:,0]
+    df_match['pca2'] = pca_result[:,1] 
+
+    np.random.seed(42)
+    rndperm = np.random.permutation(df_match.shape[0])
+
+    n_colors = 2  # len(labels)
+    plt.figure(figsize=(16,10))
+    sns.scatterplot(
+        x="pca1", y="pca2",
+        hue="label",
+        palette=sns.color_palette("hls", n_colors),
+        data=df_match.loc[rndperm,:],   # rndperm is redundant here
+        legend="full",
+        alpha=0.3
+    )
+
+    output_path = os.path.join(config.plot_dir, f'PCA-{vtype}-{cohort}.png') 
+    saveFig(plt, output_path, dpi=300)
+
+    #################################################
+    # --- tSNE Plot
+
+    highlight("(demo) 4. t-SNE plot", symbol='#')
+    plt.clf()
+    time_start = time.time()
+    tsne = TSNE(n_components=2, verbose=1, perplexity=15, n_iter=300)
+    tsne_results = tsne.fit_transform(X)
+    print('t-SNE done! Time elapsed: {} seconds'.format(time.time()-time_start))
+
+    df_match['tsne1'] = tsne_results[:,0]
+    df_match['tsne2'] = tsne_results[:,1]
+    plt.figure(figsize=(16,10))
+
+    # note: requires seaborn-0.9.0
+    sns.scatterplot(
+        x="tsne1", y="tsne2",
+        hue="label",
+        palette=sns.color_palette("hls", n_colors),
+        data=df_match,
+        legend="full",
+        alpha=0.3
+    )
+
+    output_path = os.path.join(config.plot_dir, f'tSNE-{vtype}-{cohort}.png') 
+    saveFig(plt, output_path, dpi=300)
+
+    return
+
+def load_dataset(dtype, **kargs): 
+    cohort = kargs.get('cohort', config.cohort)
+    input_dir = kargs.get("data", config.data_dir)  # e.g. /Users/<user>/work/data
+    sep = kargs.get('sep', ",")
+
+    tMatchingVarsOnly = kargs.get("matching_vars_only", False)
+    matching_cols = kargs.get("matching_cols", ['test_order_name', 'test_result_name'])
+
+    input_path = os.path.join(input_dir, "matchmaker-{}-{}.csv".format(dtype, cohort))  
+
+    ts = pd.read_csv(input_path, sep=sep, header=0, index_col=None, error_bad_lines=False)
+    matching_vars, regular_vars, target_vars = MatchmakerFeatureSet.categorize_features(ts, remove_prefix=False)
+    assert len(matching_vars) > len(matching_cols)
+
+    if tMatchingVarsOnly: 
+        tsX = ts[matching_vars]
+        tsY = ts[target_vars]
+        ts = pd.concat([tsX, tsY], axis=1)
+
+    print("(load_dataset) dim({}): {}".format(dtype, ts.shape))
+    return ts
+
+def filter_features(ts, scaler=None):
+    from sklearn.preprocessing import MinMaxScaler, StandardScaler
+    from sklearn.metrics.pairwise import cosine_similarity
+
+    # matching_cols = kargs.get("matching_cols", ['test_order_name', 'test_result_name'])
+    print("[filter] cols(ts):\n{}\n".format(ts.columns.values))
+    matching_vars, regular_vars, target_vars = MatchmakerFeatureSet.categorize_features(ts)
+    fX = matching_vars + regular_vars
+    print("... matching_vars:\n{}\n".format(matching_vars))
+
+    Nv0 = len(fX)
+    N0 = ts.shape[0]
+    # tsX = ts[[col for col in fX if np.mean(ts[col].values) > 0]]
+ 
+    mms = MinMaxScaler()
+    std_scale = StandardScaler()
+    # for col in fX: 
+    #     vmin, vmax = np.min(ts[col].values), np.max(ts[col].values)
+    ts[fX] = std_scale.fit_transform(ts[fX])
+    tsX = ts[[col for col in fX if not ts[col].isnull().values.any()]]
+    
+    tsY = ts[target_vars]
+    ts = pd.concat([tsX, tsY], axis=1)
+    print("[filter] After filtering 0 vars | n(vars): {} -> {}".format(Nv0, tsX.shape[1]))
+
+    # filter 0 rows 
+    row_mean = np.mean(tsX.values, axis=1)
+    ts = ts.loc[row_mean != 0]
+    # ts = ts.loc[~(ts.T == 0).all()]
+    print("[filter] After filtering 0 rows | n(ts): {} -> {}".format(N0, ts.shape[0]))
+
+    # pairwise similarity, computable? 
+    A = cosine_similarity(tsX.values)
+    print("[filter] Computed pairwise cosine similarity ...")
+
+    return ts
+
+def demo_fearture_analysis(**kargs):
+    from analyzer import balance_by_downsampling
+
+
+    cohort = kargs.get('cohort', "hepatitis-c")
+    tAddRegularVars = False
+
+    # load training data
+    ts_train = load_dataset(dtype='train') 
+    # ts_train = filter_features(ts_train)
+
+    # ts_train = balance_by_downsampling2(ts_train, cols_y=[LoincTSet.col_target, ], method='multiple', majority_max=1, verify=1)
+    visualize_training_data(ts_train, n_samples=50, verbose=1)
+    # fg_tfidf.demo_create_vars_part2(df_match=ts_train)
+
+    return 
+
 def test(**kargs):
 
-    demo_create_training_data()
+    ### Generate training data
+    # demo_create_training_data()
+
+    ### Analyze features
+    demo_fearture_analysis()
 
     return
 

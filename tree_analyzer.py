@@ -13,6 +13,8 @@ import pandas as pd
 
 from tabulate import tabulate
 from utils_plot import saveFig
+from analyzer import run_model_selection
+import common
 """
 
 
@@ -37,90 +39,6 @@ class Data(object):
     label = 'label'
     features = []
 
-
-def run_model_selection(X, y, model, p_grid={}, n_trials=30, scoring='roc_auc', output_path='', output_file='', create_dir=True, 
-                        index=0, plot_=True, ext='tif', save=False): 
-    from sklearn.model_selection import GridSearchCV, cross_val_score, KFold
-    
-    # Arrays to store scores
-    non_nested_scores = np.zeros(n_trials)
-    nested_scores = np.zeros(n_trials)
-
-    # Loop for each trial
-    icv_num = 5
-    ocv_num = 5
-    best_params = {}
-    for i in range(n_trials):
-
-        # Choose cross-validation techniques for the inner and outer loops,
-        # independently of the dataset.
-        # E.g "GroupKFold", "LeaveOneOut", "LeaveOneGroupOut", etc.
-        inner_cv = KFold(n_splits=icv_num, shuffle=True, random_state=i)
-        outer_cv = KFold(n_splits=ocv_num, shuffle=True, random_state=i)
-
-        # Non_nested parameter search and scoring
-        clf = GridSearchCV(estimator=model, param_grid=p_grid, cv=inner_cv,
-                           iid=False)
-
-        clf.fit(X, y)
-        non_nested_scores[i] = clf.best_score_
-
-        # Nested CV with parameter optimization
-        nested_score = cross_val_score(clf, X=X, y=y, cv=outer_cv, scoring=scoring)
-        nested_scores[i] = nested_score.mean()
-        best_params[i] = clf.best_params_
-
-    score_difference = non_nested_scores - nested_scores
-
-    print("Average difference of {:6f} with std. dev. of {:6f}."
-          .format(score_difference.mean(), score_difference.std()))
-
-    if plot_: 
-        plt.clf()
-        
-        # Plot scores on each trial for nested and non-nested CV
-        plt.figure()
-        plt.subplot(211)
-        non_nested_scores_line, = plt.plot(non_nested_scores, color='r')
-        nested_line, = plt.plot(nested_scores, color='b')
-        plt.ylabel("score", fontsize="14")
-        plt.legend([non_nested_scores_line, nested_line],
-                   ["Non-Nested CV", "Nested CV"],
-                   bbox_to_anchor=(0, .4, .5, 0))
-        plt.title("Non-Nested and Nested Cross Validation",
-                  x=.5, y=1.1, fontsize="15")
-
-        # Plot bar chart of the difference.
-        plt.subplot(212)
-        difference_plot = plt.bar(range(n_trials), score_difference)
-        plt.xlabel("Individual Trial #")
-        plt.legend([difference_plot],
-                   ["Non-Nested CV - Nested CV Score"],
-                   bbox_to_anchor=(0, 1, .8, 0))
-        plt.ylabel("score difference", fontsize="14")
-
-        if save: 
-            from utils_plot import saveFig
-            if not output_path: output_path = os.path.join(os.getcwd(), 'analysis')
-            if not os.path.exists(output_path) and create_dir:
-                print('(run_model_selection) Creating analysis directory:\n%s\n' % output_path)
-                os.mkdir(output_path) 
-
-            if output_file is None: 
-                classifier = 'DT'
-                name = 'ModelSelect-{}'.format(classifier)
-                suffix = n_trials 
-                output_file = '{prefix}.P-{suffix}-{index}.{ext}'.format(prefix=name, suffix=suffix, index=index, ext=ext)
-
-            output_path = os.path.join(output_path, output_file)  # example path: System.analysisPath
-
-            if verbose: print('(run_model_selection) Saving model-selection-comparison plot at: {path}'.format(path=output_path))
-            saveFig(plt, output_path, dpi=dpi, verbose=verbose) 
-        else: 
-            plt.show()
-        
-    return best_params, nested_scores
-
 # convenient wrapper for DT classifier 
 def classify(X, y, params={}, random_state=0, **kargs): 
     assert isinstance(params, dict)
@@ -128,11 +46,30 @@ def classify(X, y, params={}, random_state=0, **kargs):
     model = DecisionTreeClassifier(criterion=info_gain_measure, random_state=random_state)
     if len(params) > 0: model = model.set_params(**params)
     model.fit(X, y)
-
     return model
 
-def analyze_path(X, y, model=None, p_grid={}, feature_set=[], n_trials=100, n_trials_ms=10, save=False, output_path='', output_file='', 
-                             create_dir=True, index=0, **kargs):
+# convenient wrapper for DT classifier 
+def apply_model(X, y, model=None, params={}, **kargs): 
+    assert isinstance(params, dict)
+    if model is None: 
+        info_gain_measure = kargs.get('criterion', 'entropy')
+        random_state = kargs.get('random_state', 53)
+        model = DecisionTreeClassifier(criterion=info_gain_measure, random_state=random_state)
+    if len(params) > 0: model = model.set_params(**params)
+    model.fit(X, y)
+    return model
+
+def predict(X, y=[], p_th=0.5, model=None, params={}, **kargs): 
+    assert isinstance(params, dict)
+    if model is None: 
+        info_gain_measure = kargs.get('criterion', 'entropy')
+        random_state = kargs.get('random_state', 53)
+        model = DecisionTreeClassifier(criterion=info_gain_measure, random_state=random_state)
+    y_pred = model.predict_proba(X)
+    return y_pred
+
+def analyze_path(X, y, model=None, p_grid={}, best_params={}, feature_set=[], n_trials=100, n_trials_ms=10, save=True, output_path='', output_file='', 
+                    create_dir=True, index=0, **kargs):
     # from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor 
     from sklearn.model_selection import train_test_split # Import train_test_split function
     from utils_tree import visualize, count_paths, count_paths2, count_features2
@@ -143,11 +80,20 @@ def analyze_path(X, y, model=None, p_grid={}, feature_set=[], n_trials=100, n_tr
     verbose = kargs.get('verbose', False)
     merge_labels = kargs.get('merge_labels', True)
     policy_count = kargs.get('policy_counts', 'standard') # options: {'standard', 'sample-based'}
-    experiment_id = kargs.get('experiment_id', 'test') # a file ID for the output (e.g. example decision tree)
-    validate_tree = kargs.get('validate_tree', True)
-    plot_dir = kargs.get('plot_dir', plotDir)
-    plot_ext = kargs.get('plot_ext', 'tif')
     to_str = kargs.get('to_str', False)  # if True, decision paths are represented by strings (instead of tuples)
+    
+    # [output] tree visualization
+    experiment_id = kargs.get('experiment_id', 'test') # a file ID for the output (e.g. example decision tree)
+    validate_tree = kargs.get('save_tree', True)
+
+    # [output] model selection
+    plot_dir = kargs.get('plot_dir', plotDir)
+    plot_ext = kargs.get('plot_ext', 'pdf')
+    validate_ms = kargs.get('save_ms', True)
+
+    # output meta generated from model training
+    tReturnMetaData = kargs.get('return_meta_data', False)
+
     ####################
     
     labels = np.unique(y)
@@ -161,16 +107,21 @@ def analyze_path(X, y, model=None, p_grid={}, feature_set=[], n_trials=100, n_tr
         msg += "... class distribution: {}\n".format(collections.Counter(y))
     print(msg)
 
-    # define model 
-    if model is None: model = DecisionTreeClassifier(criterion='entropy', random_state=time.time())
+    # -- define model 
+    if model is None: 
+        info_gain_measure = kargs.get('criterion', 'entropy')
+        model = DecisionTreeClassifier(criterion=info_gain_measure, random_state=time.time())
     
-    # run model selection 
+    # -- run model selection
     if len(p_grid) > 0: 
-        best_params, nested_scores = \
-          run_model_selection(X, y, model, p_grid=p_grid, n_trials=n_trials_ms, output_path=output_path, ext=plot_ext)
-        the_index = np.argmax(nested_scores)
-        the_params = best_params[np.argmax(nested_scores)]
-        # print('> type(best_params): {}:\n{}\n'.format(type(best_params), best_params))
+        best_params, params, nested_scores = \
+            run_model_selection(X, y, model, p_grid=p_grid, n_trials=n_trials_ms, 
+                output_path=output_path, meta=experiment_id, ext=plot_ext, save=validate_ms)
+        # best_index = np.argmax(nested_scores)
+        # best_params = params[best_index]
+        print('[path] best_params(DT):\n{}\n'.format(best_params))
+    else: 
+        assert len(best_params) > 0
         
     # initiate data structures 
     paths = {}
@@ -178,30 +129,42 @@ def analyze_path(X, y, model=None, p_grid={}, feature_set=[], n_trials=100, n_tr
     counts = {f: [] for f in feature_set} # maps features to lists of thresholds
         
     # build N different decision trees and compute their statistics (e.g. performance measures, decision path counts)
-    auc_scores = []
+    measures = ['accuracy', 'auc', 'fmax', 'p_threshold']
+    scores = {m:[] for m in measures}
     test_points = np.random.choice(range(n_trials), 1)
+    # prob_thresholds = []
     for i in range(n_trials): 
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=i) # 70% training and 30% test
-        # print("[{}] dim(X_test): {}".format(i, X_test.shape))
+        print("[{}] dim(X_test): {}".format(i, X_test.shape))
 
-        # [todo]: how to reset a (trained) model? 
-        model = classify(X_train, y_train, params=the_params, random_state=i)
+        # model = model.set_params(**best_params).fit(X_train, y_train)
+        model = apply_model(X_train, y_train, model=model, params=best_params) 
+        # ... fit (X, y) at given "params" (e.g. best params from model selection)
         
         # [test]
         if i in test_points: 
             if verbose: print("... building {} versions of the model: {}".format(n_trials, model.get_params()) )
             if validate_tree: 
-                fild_prefix = "{id}-{index}".format(id=experiment_id, index=i)
-                graph = visualize(model, feature_set, labels, file_name=file_prefix, ext='tif')
+                fname = "{id}-{index}".format(id=experiment_id, index=i)
+                graph = visualize(model, feature_set, labels, file_name=fname, ext=plot_ext, save=validate_tree)
                 
                 # display the tree in the notebook
                 # Image(graph.create_png())  # from IPython.display import Image
         
         y_pred = model.predict(X_test)
+        y_prob = model.predict_proba(X_test)
         accuracy = metrics.accuracy_score(y_test, y_pred)
-        auc_score = metrics.roc_auc_score(y_test, y_pred)
-        if i % 10 == 0: print("[{}] Accuracy: {}, AUC: {}".format(i, accuracy, auc_score))
-        auc_scores.append(auc_score)
+
+        # need probabilistic predictions for the following metrics
+        auc_score = metrics.roc_auc_score(y_test, y_prob[:,1])
+        fmax, p_th = common.fmax_score_threshold(y_test, y_prob[:,1])  
+        # ... Note that the index of the class: clf.classes_
+
+        print("[{}] F1 reaches max: {} at p_th: {}".format(i, fmax, p_th))
+        if i % 10 == 0: 
+            print("[{}] Accuracy: {}, AUC: {}, Fmax: {}".format(i, accuracy, auc_score, fmax))
+        scores['accuracy'].append(accuracy); scores['auc'].append(auc_score); scores['fmax'].append(fmax)
+        scores['p_threshold'].append(p_th)
 
         if not isinstance(X_test, np.ndarray): X_test = X_test.values   
             
@@ -213,11 +176,12 @@ def analyze_path(X, y, model=None, p_grid={}, feature_set=[], n_trials=100, n_tr
         if policy_count.startswith('stand'): # 'standard'
             paths, _ = \
                 count_paths(model, feature_names=feature_set, paths=paths, # count_paths, 
-                            merge_labels=merge_labels, to_str=to_str, verbose=verbose, index=i)
+                            merge_labels=merge_labels, to_str=to_str, verbose=False, index=i)
+                # ... set verbose to True to print lineage 
         else:  # 'full'
             paths, _ = \
                 count_paths2(model, X_test, feature_names=feature_set, paths=paths, # counts=counts, 
-                             merge_labels=merge_labels, to_str=to_str, verbose=verbose)
+                             merge_labels=merge_labels, to_str=to_str, verbose=False)
             
         # keep track of feature usage in terms of thresholds at splitting points
         counts = count_features2(model, feature_names=feature_set, counts=counts, labels=labels, verbose=True)
@@ -225,8 +189,12 @@ def analyze_path(X, y, model=None, p_grid={}, feature_set=[], n_trials=100, n_tr
 
         # visualization?
     ### end foreach trial 
-    print("\n(analyze_path) Averaged AUC: {} | n_trials={}".format(np.mean(auc_scores), n_trials))
-            
+    print("\n(analyze_path) E[Acc]: {} | E[AUC]: {} | E[Fmax]: {} | n_trials={}".format(np.mean(scores['accuracy']),
+        np.mean(scores['auc']), np.mean(scores['fmax']), n_trials))
+    
+    if tReturnMetaData: 
+        return paths, counts, scores         
+
     return paths, counts
 
 def load_data(input_file, **kargs): 
@@ -266,6 +234,7 @@ def runWorkflow2(X, y, features, model=None, param_grid={}, **kargs):
     #     A split point at any depth will only be considered if it leaves at least 
     #     min_samples_leaf training samples in each of the left and right branches
     counts = {}
+    experiment_id = kargs.get('experiment_id', 'test')
 
     if not model: 
         if not param_grid:  # p_grid
@@ -290,8 +259,8 @@ def runWorkflow2(X, y, features, model=None, param_grid={}, **kargs):
 
         # 4. analyze decision paths and keep track of frequent features
         paths, counts = \
-             analyze_path(X, y, model=model, p_grid=param_grid, feature_set=features, n_trials=100, n_trials_ms=30, save=False,  
-                            merge_labels=False, policy_count='standard', experiment_id=file_prefix,
+            analyze_path(X, y, model=model, p_grid=param_grid, feature_set=features, n_trials=100, n_trials_ms=30, save=False,  
+                            merge_labels=False, policy_count='standard', experiment_id=experiment_id,
                                create_dir=True, index=0, validate_tree=False, to_str=True, verbose=False)
 
         summarize_paths(paths, topk=topk)
@@ -369,7 +338,7 @@ def runWorkflow(**kargs):
 
     # 4. analyze decision paths and keep track of frequent features
     paths, counts = \
-         analyze_path(X, y, model=model, p_grid=p_grid, feature_set=features, n_trials=100, n_trials_ms=30, save=False,  
+        analyze_path(X, y, model=model, p_grid=p_grid, feature_set=features, n_trials=100, n_trials_ms=30, save=False,  
                         merge_labels=False, policy_count='standard', experiment_id=file_prefix,
                            create_dir=True, index=0, validate_tree=False, to_str=True, verbose=False)
 

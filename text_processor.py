@@ -61,6 +61,11 @@ def preprocess_text_simple(df=None, col='', source_values=[], value_default=""):
 # --- alias ---
 preprocess_text = preprocess_text_simple
 
+def process_string(s, doc_type='string'): 
+    if pd.isna(s): return ""
+    sp = process_text(source_values=s, clean=True, standardized=True, doc_type=doc_type)[0]
+    return sp
+
 def process_text(df=None, col='', source_values=[], clean=True, standardized=True, **kargs): 
     """
     Parse long strings, such as LOINC's long name field and MTRT, which typically serve as "tags"

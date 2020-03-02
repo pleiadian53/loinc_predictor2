@@ -29,7 +29,7 @@ from loinc_mtrt import LoincMTRT
 import loinc_mtrt as lmt
 
 import text_processor
-# from text_processor import preprocess_text_simple, process_text
+from text_processor import process_text, process_string
 from utils_sys import highlight
 
 
@@ -1001,7 +1001,7 @@ def make_string_distance_features(df=None, dataType='test_order_name', loincmap=
     # preprocess source value to ensure that all values are of string type
     # preprocess_text_simple(df, col=dataType, source_values=source_values, value_default=value_default)
 
-    if standardize: source_values = text_processor.process_text(source_values=source_values, clean=True, standardized=True)
+    if standardize: source_values = process_text(source_values=source_values, clean=True, standardized=True)
     # preprocess_text_simple(source_values=source_values, value_default="")
     ############################################################
 
@@ -1214,10 +1214,10 @@ def make_string_distance_features(df=None, dataType='test_order_name', loincmap=
 
     return df
 
-def process_text(source_values, doc_type='query'): 
-    sp = "" if pd.isna(source_values) else text_processor.process_text(source_values=source_values, 
-                    clean=True, standardized=True, doc_type=doc_type)[0]
-    return sp
+# def process_text(source_values, doc_type='query'): 
+#     sp = "" if pd.isna(source_values) else text_processor.process_text(source_values=source_values, 
+#                     clean=True, standardized=True, doc_type=doc_type)[0]
+#     return sp
 def preprocess_text_simple(df=None, col='', source_values=[], value_default=""):
     return text_processor.preprocess_text_simple(df=df, col=col, source_values=source_values, value_default=value_default)
  
@@ -1295,8 +1295,8 @@ def compute_similarity_with_loinc(row, code, target_cols=[], loinc_lookup={}, va
 
         # query vs document (parts of docs)
         # use preprocess_text_simple for now (source_values=source_values, value_default="")
-        t_text = process_text(t_text, doc_type='query')
-        d_text = process_text(d_text, doc_type='doc')
+        t_text = process_string(t_text, doc_type='query')
+        d_text = process_string(d_text, doc_type='doc')
 
         dfv = vars_lookup[query]  # col
         dfv.fillna("", inplace=True)
@@ -1382,20 +1382,25 @@ def feature_transform(df, target_cols=[], df_src=None, **kargs):
     df: the data set containing the positive examples (with reliable LOINC assignments)
 
     """
-    def show_evidence(row, code_neg=None, sdict={}, print_=False, min_score=0.0, label='?'):
+    def show_evidence(row, code, code_neg=None, sdict={}, print_=False, min_score=0.0, label='?'):
         # sdict: T-attribute -> Loinc descriptor -> score
          
         code = row[LoincTSet.col_code]
-        msg = "(evidence) Found matching signals > code: {} ({})\n".format(code, label)
+        code_x = code   # Target code's corresponding T-attributes are to be matched against 
+
+        msg = "(evidence) Found matching signals for code(+): {} (target aka \"reliable\" positive)\n".format(code)
         if code_neg is not None:
-            msg = "(evidence) {} ->? {} (-)\n".format(code, code_neg) 
+            msg = "(hypothesis) Found matching signals when {}(+) is REASSIGNED to {} (-)?\n".format(code, code_neg) 
             # ... the input code could be re-assigned to the code_neg
+            label = '-'
+            code_x = code_neg
 
         for col, entry in sdict.items(): 
-            msg += "... {}: {} ~ \n".format(col, row[col])  # a T-attribute and its value
-            for col_loinc, score in entry.items():
+            msg += "... {}: {}\n".format(col, row[col])  # a T-attribute and its value
+            for col_loinc, score in entry.items():  # how does the current row's T attributes compared to the LOINC code's descriptors?
                 if score > min_score: 
-                    msg += "    + {}: {} => score: {}\n".format(col_loinc, process_text(loinc_lookup[code][col_loinc]), score)
+                    msg += "...  {}: {} => score: {} | {}({})\n".format(col_loinc, 
+                        process_string(loinc_lookup[code_x][col_loinc]), score, code_x, label)
         if print_: print(msg)
         return msg
 
@@ -1495,9 +1500,9 @@ def feature_transform(df, target_cols=[], df_src=None, **kargs):
                     tHasSignal = False
                     msg = f"[{r}] Code(+): {code} ~? target: {code}\n"
                     for target_col, entry in named_scores.items(): 
-                        msg += "... Col: {}: {}\n".format(target_col, process_text(row[target_col]))
-                        msg += "... LN:  {}: {}\n".format(code, process_text(loinc_lookup[code][col_ln]))
-                        msg += "... SN:  {}: {}\n".format(code, process_text(loinc_lookup[code][col_sn]))
+                        msg += "... Col: {}: {}\n".format(target_col, process_string(row[target_col]))
+                        msg += "... LN:  {}: {}\n".format(code, process_string(loinc_lookup[code][col_ln]))
+                        msg += "... SN:  {}: {}\n".format(code, process_string(loinc_lookup[code][col_sn]))
                         
                         for target_dpt, score in entry.items():
                             n_comparisons_pos += 1
@@ -1512,7 +1517,7 @@ def feature_transform(df, target_cols=[], df_src=None, **kargs):
                         msg += "...... FP > no similar properties found between {} and {} #\n".format(target_cols, target_descriptors)
                         print(msg)
                     if tHasSignal: 
-                        highlight(show_evidence(row, sdict=named_scores, print_=False, min_score=0.5), symbol='#')
+                        highlight(show_evidence(row, code=code, sdict=named_scores, print_=False, min_score=0.5, label='+'), symbol='#')
                 #########################################################################
 
                 # [Q] what happens if we were to assign an incorrect LOINC code, will T-attributes stay consistent with its LOINC descriptor? 
@@ -1536,9 +1541,9 @@ def feature_transform(df, target_cols=[], df_src=None, **kargs):
                             # positive_scores = defaultdict(dict)
                             msg = f"[{r}] Code(-): {code_neg} ~? Target: {code}\n"
                             for target_col, entry in named_scores.items(): 
-                                msg += "... Col: {}: {}\n".format(target_col, process_text(row[target_col]))
-                                msg += "... LN:  {}: {}\n".format(code_neg, process_text(loinc_lookup[code_neg][col_ln]))
-                                msg += "... SN:  {}: {}\n".format(code_neg, process_text(loinc_lookup[code_neg][col_sn]))
+                                msg += "... Col: {}: {}\n".format(target_col, process_string(row[target_col]))
+                                msg += "... LN:  {}: {}\n".format(code_neg, process_string(loinc_lookup[code_neg][col_ln]))
+                                msg += "... SN:  {}: {}\n".format(code_neg, process_string(loinc_lookup[code_neg][col_sn]))
 
                                 # nonzeros = []
                                 for target_dpt, score in entry.items():
@@ -1553,7 +1558,7 @@ def feature_transform(df, target_cols=[], df_src=None, **kargs):
                                     msg += "...... FN > found similar properties between T-attributes(code={}) and negative: {}  ###\n".format(code, code_neg)
                                     print(msg)  
                                 if tHasSignal: 
-                                    highlight(show_evidence(row, code_neg=code_neg, sdict=positive_scores, print_=False, min_score=0.5), symbol='#')
+                                    highlight(show_evidence(row, code=code, code_neg=code_neg, sdict=named_scores, print_=False, min_score=0.5), symbol='#')
                         # ------------------------------------------------
     X = np.vstack([pos_instances, neg_instances])
     print("[transform] from n(df)={}, we created n={} training instances".format(N0, X.shape[0]))
@@ -1670,20 +1675,25 @@ def demo_create_vars(**kargs):
     -------
     feature_gen_sdist_vars()
     """
-    def show_evidence(row, code_neg=None, sdict={}, print_=False, min_score=0.0, label='?'):
+    def show_evidence(row, code, code_neg=None, sdict={}, print_=False, min_score=0.0, label='?'):
         # sdict: T-attribute -> Loinc descriptor -> score
          
         code = row[LoincTSet.col_code]
-        msg = "(evidence) Found matching signals > code: {} ({})\n".format(code, label)
+        code_x = code   # Target code's corresponding T-attributes are to be matched against 
+
+        msg = "(evidence) Found matching signals for code(+): {} (target aka \"reliable\" positive)\n".format(code)
         if code_neg is not None:
-            msg = "(evidence) {} ->? {} (-)\n".format(code, code_neg) 
+            msg = "(hypothesis) Found matching signals when {}(+) is REASSIGNED to {} (-)?\n".format(code, code_neg) 
             # ... the input code could be re-assigned to the code_neg
+            label = '-'
+            code_x = code_neg
 
         for col, entry in sdict.items(): 
-            msg += "... {}: {} ~ \n".format(col, row[col])  # a T-attribute and its value
-            for col_loinc, score in entry.items():
+            msg += "... {}: {}\n".format(col, row[col])  # a T-attribute and its value
+            for col_loinc, score in entry.items():  # how does the current row's T attributes compared to the LOINC code's descriptors?
                 if score > min_score: 
-                    msg += "    + {}: {} => score: {}\n".format(col_loinc, process_text(loinc_lookup[code][col_loinc]), score)
+                    msg += "...  {}: {} => score: {} | {}({})\n".format(col_loinc, 
+                        process_string(loinc_lookup[code_x][col_loinc]), score, code_x, label)
         if print_: print(msg)
         return msg
 
@@ -1790,9 +1800,9 @@ def demo_create_vars(**kargs):
                 positive_scores = defaultdict(dict)
                 msg = f"[{r}] Code(+): {code}\n"
                 for target_col, entry in named_scores.items(): 
-                    msg += "... Col: {}: {}\n".format(target_col, process_text(row[target_col]))
-                    msg += "... LN:  {}: {}\n".format(code, process_text(loinc_lookup[code][col_ln]))
-                    msg += "... SN:  {}: {}\n".format(code, process_text(loinc_lookup[code][col_sn]))
+                    msg += "... Col: {}: {}\n".format(target_col, process_string(row[target_col]))
+                    msg += "... LN:  {}: {}\n".format(code, process_string(loinc_lookup[code][col_ln]))
+                    msg += "... SN:  {}: {}\n".format(code, process_string(loinc_lookup[code][col_sn]))
                     
                     for target_dpt, score in entry.items():
                         n_comparisons_pos += 1
@@ -1807,7 +1817,7 @@ def demo_create_vars(**kargs):
                     msg += "...... ((( FP ))) No similar properties found between {} and {} #\n".format(target_cols, target_descriptors)
                     print(msg)
                 else: 
-                    highlight(show_evidence(row, sdict=positive_scores, print_=False, label='+'), symbol='#')
+                    highlight(show_evidence(row, code=code, sdict=positive_scores, print_=False, label='+'), symbol='#')
 
                 #########################################################################
                 highlight("What if we assign a wrong code deliberately?", symbol='#')
@@ -1829,9 +1839,9 @@ def demo_create_vars(**kargs):
                         positive_scores = defaultdict(dict)
                         msg = f"[{r}] Code(-): {code_neg} ~? Target: {code}\n"
                         for target_col, entry in named_scores.items(): 
-                            msg += "... Col: {}: {}\n".format(target_col, process_text(row[target_col]))
-                            msg += "... LN:  {}: {}\n".format(code_neg, process_text(loinc_lookup[code_neg][col_ln]))
-                            msg += "... SN:  {}: {}\n".format(code_neg, process_text(loinc_lookup[code_neg][col_sn]))
+                            msg += "... Col: {}: {}\n".format(target_col, process_string(row[target_col]))
+                            msg += "... LN:  {}: {}\n".format(code_neg, process_string(loinc_lookup[code_neg][col_ln]))
+                            msg += "... SN:  {}: {}\n".format(code_neg, process_string(loinc_lookup[code_neg][col_sn]))
 
                             # nonzeros = []
                             for target_dpt, score in entry.items():
@@ -1846,7 +1856,7 @@ def demo_create_vars(**kargs):
                                 print(msg)  
                             if len(positive_scores) > 0: 
                                 tFoundMatchInNeg = True
-                                highlight(show_evidence(row, code_neg=code_neg, sdict=positive_scores, print_=False, label='-'), symbol='#')
+                                highlight(show_evidence(row, code=code, code_neg=code_neg, sdict=positive_scores, print_=False, label='-'), symbol='#')
                 if tFoundMatchInNeg: 
                     n_detected_in_negatives += 1
 
@@ -1884,10 +1894,23 @@ def demo_create_vars(**kargs):
     return df_match
 
 def demo_create_vars_part2(**kargs): 
-    import feature_gen_tfidf as fgen
+    import feature_gen as fg
+    
+    vtype = kargs['vtype'] = 'sdist'
+   
+    parentdir = os.path.dirname(os.getcwd())
+    testdir = os.path.join(parentdir, 'test')  # e.g. /Users/<user>/work/data
+    input_file = f'{vtype}-vars.csv'
+    input_path = os.path.join(testdir, input_file)
 
-    kargs['vtype'] = 'sdist'
-    return fgen.demo_create_vars_part2(**kargs)
+    # kargs['vtype'] = 'sdist'
+    # return fgen.demo_create_vars_part2(**kargs)
+    
+    df = pd.read_csv(input_path, sep=",", header=0, index_col=None, error_bad_lines=False)
+    print("(demo) dim(df): {}".format(df.shape)) 
+    fg.visualize_training_data(df, n_samples=50, verbose=1)
+
+    return
 
 def test_csv_to_excel(input_file='', **kargs): 
     """
@@ -1962,7 +1985,7 @@ def test_data():
 
 
         for sval in source_values:  # foreach source value/text
-            sval = process_text(sval, doc_type='query')
+            sval = process_string(sval, doc_type='query')
             if len(sval) == 0: continue 
 
             dfvi = dfv.loc[dfv[col] == sval]
@@ -2021,12 +2044,12 @@ def test():
     # make_string_distance_features(loincmap=loincmap, source_values=unique_tests)
 
     # --- string distance similarity
-    demo_string_distance()
+    # demo_string_distance()
 
     # --- features based on string distances
     # demo_create_vars_init()
     # demo_create_vars()
-    # demo_create_vars_part2()
+    demo_create_vars_part2()
 
     # --- Test Utilities
     # test_data()
