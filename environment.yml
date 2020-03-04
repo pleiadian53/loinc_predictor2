@@ -1,0 +1,12 @@
+name: loinc_predictor
+channels:
+- conda-forge
+
+dependencies:
+- python=3.6
+
+- pip:
+  - jupyter
+  - feature_selector
+  - gensim
+  - tabulate
