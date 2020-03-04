@@ -560,6 +560,113 @@ def list_unique_values(df, cols=[], **kargs):
         
     return adict
 
+def det_range2(X, y, fset, **kargs):
+    def the_other_label(y, given): 
+        ulabels = list(np.unique(y))
+        ulabels.remove(given)
+        return ulabels
+
+    # output 
+    res = {}   # used to collect the statistics for later use
+    uniq_labels = np.unique(y)
+
+    # special case: binary
+    isSimpleBinary = True
+    lmap = {}
+    if len(uniq_labels) == 2: 
+        lmap = {1: '+', 0: '-', -1: '-'}
+        isSimpleBinary = True
+
+    vmin, vmax = np.min(X), np.max(X)
+    print("[analysis] min(X): {}, max(X): {}".format(vmin, vmax))
+    # print("... dim(X): {}, dim(y): {}".format(X.shape, y.shape))
+    res['Xmin'], res['Xmax'] = vmin, vmax
+
+    for label in uniq_labels: 
+        polarity = lmap.get(label, '?')
+        print("... column-wise mean ({}):\n{}\n".format(polarity, list(zip(fset, np.mean(X[y==label, :], axis=0)))))
+
+    print("... column-wise mean overall:\n{}\n".format(list(zip(fset, np.mean(X, axis=0)))))
+
+    # row_mean = np.mean(X, axis=1)
+    # print("... n(row-wise 0): {}".format(np.sum(row_mean == 0)))
+
+    # look into "trival vectors" such as zero vectors
+    if isSimpleBinary: 
+        pos_label = kargs.get('pos_label', 1)
+        neg_label = the_other_label(uniq_labels, given=pos_label)[0]
+
+        # assume that the positive is encoded as 1
+        X_pos = X[y==pos_label, :]
+        X_neg = X[y==neg_label, :]
+    
+        rows_zeros = np.where(~X.any(axis=1))[0]
+        print("... found n={} zero vectors overall (which cannot be normalized; troubles in computing correlation)".format(len(rows_zeros)))
+        rows_pos_zeros = np.where(~X_pos.any(axis=1))[0]
+        rows_neg_zeros = np.where(~X_neg.any(axis=1))[0]
+        print("... N(pos): {}, n(pos, 0): {}, ratio: {}".format(X_pos.shape[0], len(rows_pos_zeros), len(rows_pos_zeros)/(X_pos.shape[0]+0.0)))
+        print("... N(neg): {}, n(neg, 0): {}, ratio: {}".format(X_neg.shape[0], len(rows_neg_zeros), len(rows_neg_zeros)/(X_neg.shape[0]+0.0)))
+
+    return res
+
+def det_range(df, **kargs): 
+    def the_other_label(y, given): 
+        ulabels = list(np.unique(y))
+        ulabels.remove(given)
+        return ulabels
+
+    from data_processor import toXY
+    cols_y = kargs.get("cols_y", [])
+    cols_x = kargs.get("cols_x", [])
+
+    # output 
+    res = {}   # used to collect the statistics for later use
+
+    X, y, fset, lset = toXY(df, cols_x=cols_x, cols_y=cols_y, scaler=None, perturb=False)
+    res['labels'] = uniq_labels = np.unique(y)
+    
+    # special case: binary
+    isSimpleBinary = False
+    lmap = {}
+    if len(uniq_labels) == 2: 
+        lmap = {1: '+', 0: '-', -1: '-'}
+        if len(cols_y) == 1: 
+            isSimpleBinary = True
+
+    vmin, vmax = np.min(X), np.max(X)
+    print("[analysis] min(X): {}, max(X): {}".format(vmin, vmax))
+    # print("... dim(X): {}, dim(y): {}".format(X.shape, y.shape))
+    res['Xmin'], res['Xmax'] = vmin, vmax
+
+    for label in uniq_labels: 
+        polarity = lmap.get(label, '?')
+        print("... column-wise mean ({}):\n{}\n".format(polarity, 
+                   list(zip(fset, np.mean(X[y==label, :], axis=0)))))
+
+    print("... column-wise mean overall:\n{}\n".format(list(zip(fset, np.mean(X, axis=0)))))
+
+    # row_mean = np.mean(X, axis=1)
+    # print("... n(row-wise 0): {}".format(np.sum(row_mean == 0)))
+
+    # look into "trival vectors" such as zero vectors
+    if isSimpleBinary: 
+        col_label = cols_y[0]
+        pos_label = kargs.get('pos_label', 1)
+        neg_label = the_other_label(uniq_labels, given=pos_label)[0]
+
+        # assume that the positive is encoded as 1
+        df_pos = df[df[col_label]==pos_label]
+        df_neg = df[df[col_label]==neg_label]
+    
+        df_zeros = df.loc[(df.T == 0).all()]
+        print("... found n={} zero vectors overall (which cannot be normalized; troubles in computing correlation)".format(df_zeros.shape[0]))
+        df_pos_zeros = df_pos.loc[(df_pos.T == 0).all()]
+        df_neg_zeros = df_neg.loc[(df_neg.T == 0).all()]
+        print("... N(pos): {}, n(pos, 0): {}, ratio: {}".format(df_pos.shape[0], df_pos_zeros.shape[0], df_pos_zeros.shape[0]/df_pos.shape[0]))
+        print("... N(neg): {}, n(neg, 0): {}, ratio: {}".format(df_neg.shape[0], df_neg_zeros.shape[0], df_neg_zeros.shape[0]/df_neg.shape[0]))
+
+    return res
+
 def det_cardinality(df, **kargs):
     verbose = kargs.get('verbose', 1)
     th_card = kargs.get('th_card', 10) # if n(uniq values) >= this number => high card
@@ -1454,6 +1561,22 @@ def demo_loinc(**kargs):
 
     return
 
+def test_indv(**kargs):
+    
+    # --- Feature value range analysis
+    X = np.array([ [0, 1, 0, 1], 
+                   [0, 0, 0, 0], 
+                   [1, 1, 0, 1], 
+                   [0, 0, 0, 0], 
+                   [1, 1, 1, 1]
+                       ])
+    y = np.array([1, 0, 1, 0, 1])
+    fset = ['x1', 'x2', 'x3', 'x4', 'x5']
+
+    det_range2(X, y, fset=fset, pos_label=1)
+
+    return
+
 def test(**kargs):
     subjects = [ 'hard', ] # {'table', 'ts'/'data', 'hard', 'feature'/'vars'}
     verbose = 1
@@ -1488,4 +1611,6 @@ def test(**kargs):
     return
 
 if __name__ == "__main__":
-    test()
+    # test()
+
+    test_indv()

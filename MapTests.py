@@ -69,3 +69,4 @@ def parse_test_tokens_with_loinc(df, col_target='test_result_loinc_code', **karg
         short_to_long_df.to_csv( os.path.join(config.out_dir, "LOINC_Name_Map.csv"), sep="|", index=False)
         parsed_loinc_fields_df.to_csv(  os.path.join(config.out_dir, "LOINC_Parsed_Component_System_Longword.csv"), sep="|", index=False)
     return [short_to_long_df, parsed_loinc_fields_df]
+

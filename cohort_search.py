@@ -245,11 +245,11 @@ def gen_query_str(keywords, condition='hepatitis-c', cols=['diagnosis_codes', 'b
 
 ### I/O Utility ### 
 def save_query(df, cohort='', output_file='', sep='|', **kargs): 
-    from analyzer import save_generic
+    from data_processor import save_generic
     save_generic(df, cohort=cohort, dtype='query', sep=sep, **kargs) # output_file/'', 
     return
 def load_query(cohort='', output_file='', sep='|', **kargs):
-    from analyzer import load_generic
+    from data_processor import load_generic
     return load_generic(cohort=cohort, dtype='query', sep=sep, **kargs)
 
 

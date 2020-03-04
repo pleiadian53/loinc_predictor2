@@ -28,6 +28,8 @@ class LoincTable(object):
     col_method = 'METHOD_TYP'
     col_prop = 'PROPERTY'
 
+    # descriptors = []
+
     cols_6p = six_parts = p6 = ['COMPONENT', 'PROPERTY', 'TIME_ASPCT', 'SYSTEM', 'SCALE_TYP', 'METHOD_TYP', ]  # ['CLASS']
     text_cols = ['LONG_COMMON_NAME', 'SHORTNAME', 'RELATEDNAMES2', 'STATUS_TEXT'] + cols_6p
 
@@ -338,6 +340,7 @@ class FeatureSet(object):
 
     target_cols = ['test_result_loinc_code', ]
     derived_cols = ['count']  # other possible vars: test result n-th percentile, normalized test frequency
+    meta_cols = []
 
     # cardinality < 100
     low_card_cols = ['patient_gender', 'fasting', 'meta_sender_name' ]
@@ -392,6 +395,31 @@ class FeatureSet(object):
             df.drop(col, axis=1, inplace=True)
         return df
 
+    @staticmethod
+    def categorize_features(ts): 
+        import numpy as np
+
+        cat_cols = FeatureSet.cat_cols
+        cont_cols = FeatureSet.cont_cols
+        target_cols = FeatureSet.target_cols
+
+        # if remove_prefix set to True, then remove the prefix "test_" before comparing withthe dataframe's column
+        matching_vars = [col for col in ts.columns if col.startswith(matching_cols)]
+
+        target_vars = target_cols # all specified target should be present
+        assert np.all([col in ts.columns for col in target_cols]), \
+            "Missing (a subset of) target cols: {}\n... col(ts):\n{}\n".format(target_vars, list(ts.columns))
+
+        derived_vars = [col for col in FeatureSet.derived_cols if col in ts.columns]
+        meta_vars = [col for col in FeatureSet.meta_cols if col in ts.columns]
+
+        V = cat_cols + cont_cols
+        regular_vars = [col for col in sorted(set(V)-set(matching_vars)-set(target_vars)-set(derived_vars)-set(meta_vars), key=V.index) 
+                            if col in ts.columns]
+        # sorted(set(V)-set(matching_vars)-set(target_vars)-set(derived_vars)-set(meta_vars), key=V.index)
+
+        return (matching_vars, regular_vars, target_vars, derived_vars, meta_vars)
+
 ### end class FeatureSet
 
 class MatchmakerFeatureSet(FeatureSet): 
@@ -404,13 +432,16 @@ class MatchmakerFeatureSet(FeatureSet):
         'test_result_reference_range',  # n_uniq=5735, moderate missing
         'test_result_comments',  # mostly missing > 80%   # <<<< 
         'panel_order_name',  # n_uniq=11663
-        'medivo_test_result_type',  # n_uniq=696/(n=67079,N=71224 | r_miss=5.82%) <<<<
+        # 'medivo_test_result_type',  # n_uniq=696/(n=67079,N=71224 | r_miss=5.82%) <<<<
 
         # need to also include the label column (y)
         # 'test_result_loinc_code', 
 
     ]
     # ... these are the candidate features used to match with LOINC descriptors
+
+    matching_cols_transformed = []  # cross product between matching_cols and descriptors (loinc attributes)
+    # ... [todo] to be computed via FeatureSet.join_features([attr1, attr2], feature_suffices)
 
     cat_cols = [
                 # 'patient_gender', 
@@ -441,32 +472,105 @@ class MatchmakerFeatureSet(FeatureSet):
     cont_cols = ['age',   # patient_date_of_birth -> age  # <<< 
          ] 
 
-    target_cols = ['test_result_loinc_code', ] # label(s) in the source data
-    matching_target_cols = ['label', ]  # the label for the matchmaker dataset
+    # new attributes 
+    col_assignment = 'assignment'
+    col_target = 'label'  # matching status 
+    pos_label = 1
+    neg_label = 0
+    
+    target_cols = matching_target_cols = [col_target, ]  # the label for the matchmaker dataset
+    # ... cf: FeatureSet.target_cols: ['test_result_loinc_code', ] # label(s) in the source data
 
-    derived_cols = ['count']  # other possible vars: test result n-th percentile, normalized test frequency
+    # derived_cols = FeatureSet.derived_cols
+    # other possible vars: test result n-th percentile, normalized test frequency
+    
+    descriptors = [LoincTable.col_ln, LoincTable.col_sn, LoincTable.col_com, 
+                   LoincTable.col_sys, LoincTable.col_method, LoincTable.col_prop]
+    # col_ln = long_name = 'LONG_COMMON_NAME'
+    # col_sn = short_name = 'SHORTNAME'
+    # col_com = 'COMPONENT'
+    # col_sys = 'SYSTEM'
+    # col_method = 'METHOD_TYP'
+    # col_prop = 'PROPERTY'
+
+    # after the feature transformation, what was originally matching_cols are now just meta data (not part of the active trainining variables)
+    meta_cols = [col_assignment, ] + matching_cols + descriptors
 
     high_card_cols = list(set(cat_cols)-set(FeatureSet.low_card_cols)-set(matching_cols))
 
     @staticmethod
     def categorize_features(ts, remove_prefix=True): 
+        """
+        Categorize variables prior to the feature transform (see feature_gen.text_feature_transform)
+        """
+        matching_cols = MatchmakerFeatureSet.matching_cols
+
+        # if remove_prefix set to True, then remove the prefix "test_" before comparing withthe dataframe's column
+        if remove_prefix: 
+            new_cols = []
+            for i, col in enumerate(matching_cols): 
+                new_cols.append(col.replace("test_", ""))
+            matching_cols = new_cols
+
+        matching_cols = tuple(matching_cols)
+        derived_cols = FeatureSet.derived_cols
+        meta_cols = FeatureSet.meta_cols
+
+        # LOINC attributes
+        descriptors = tuple(MatchmakerFeatureSet.descriptors)
+
+        # now ready to define eligible variables based on the input data and the predefined schema (given above)
+        ################################
+
+        matching_vars = [col for col in ts.columns if col.startswith(matching_cols)]
+        target_vars = FeatureSet.target_cols
+        assert np.all([col in ts.columns for col in target_vars]), \
+            "Missing (a subset of) target cols: {}\n... col(ts):\n{}\n".format(target_vars, list(ts.columns))
+
+        # derived columns (derived from the original data with raw feature set)
+        derived_vars = [col for col in derived_cols if col in ts.columns]
+        meta_vars = [col for col in meta_cols if col in ts.columns]
+
+        V = list(ts.columns)
+        regular_vars = sorted(set(V)-set(matching_vars)-set(target_vars)-set(derived_vars)-set(meta_vars), key=V.index)
+
+        return (matching_vars, regular_vars, target_vars, derived_vars, meta_vars)
+    @staticmethod
+    def categorize_transformed_features(ts, remove_prefix=False): 
+        # this is the same as categorize_features() except that T-attributes are now paired with LOINC descriptors ... 
+        # ... nonetheless, these matching variables should also start with those specified in "matching_cols"
+
         matching_cols = MatchmakerFeatureSet.matching_cols
         if remove_prefix: 
             new_cols = []
             for i, col in enumerate(matching_cols): 
                 new_cols.append(col.replace("test_", ""))
             matching_cols = new_cols
-            
         matching_cols = tuple(matching_cols)
-        matching_vars = [col for col in ts.columns if col.startswith(matching_cols)]
 
-        target_vars = MatchmakerFeatureSet.matching_target_cols
-        derived_vars = MatchmakerFeatureSet.derived_cols
+        matching_vars = []
+        for col in ts.columns:
+            hasLoincDescr = False # any([d in col for d in MatchmakerFeatureSet.descriptors])
+            for d in MatchmakerFeatureSet.descriptors: 
+                if d in col: 
+                    hasLoincDescr = True
+                    break
+            if col.startswith(matching_cols) and hasLoincDescr: 
+                assert not (col in MatchmakerFeatureSet.meta_cols)
+                matching_vars.append(col)
+        # matching_vars = [col for col in ts.columns if col.startswith(matching_cols)]
+
+        target_vars = MatchmakerFeatureSet.target_cols
+        assert np.all([col in ts.columns for col in target_vars]), \
+            "Missing (a subset of) target cols: {}\n... col(ts_transformed):\n{}\n".format(target_vars, list(ts.columns))
+
+        derived_vars = [col for col in MatchmakerFeatureSet.derived_cols if col in ts.columns]
+        meta_vars = [col for col in MatchmakerFeatureSet.meta_cols if col in ts.columns]
 
         V = list(ts.columns)
-        regular_vars = sorted(set(V)-set(matching_vars)-set(target_vars)-set(derived_vars), key=V.index)
+        regular_vars = sorted(set(V)-set(matching_vars)-set(target_vars)-set(derived_vars)-set(meta_vars), key=V.index)
 
-        return (matching_vars, regular_vars, target_vars)
+        return (matching_vars, regular_vars, target_vars, derived_vars, meta_vars)
 
 ### End class MatchmakerFeatureSet
 

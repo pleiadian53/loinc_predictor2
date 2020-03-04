@@ -11,7 +11,7 @@ from sklearn.base import BaseEstimator, ClassifierMixin
 
 # local modules 
 import loinc
-from loinc import LoincTable, LoincTSet
+from loinc import LoincTable, LoincTSet, FeatureSet, MatchmakerFeatureSet
 from loinc_mtrt import LoincMTRT
 import loinc_mtrt as lmt
 
@@ -1274,13 +1274,14 @@ def demo_create_vars(**kargs):
     print("... There are n={} codes not found on the LONIC+MTRT corpus table:\n{}\n".format(len(codes_missed), codes_missed))
     r_detected = n_detected/(n_comparisons_pos+0.0)
     r_detected_in_neg = n_detected_in_negatives/(n_comparisons_neg+0.0)
-    print("...... Among N={} codes, r(detected): {}, r(detected in any -): {}".format(n_codes, r_detected, r_detected_in_neg))
+    print("...... Among N={} codes, r(detected): {}, r(detected in any -): {} | method=\"tfidf\"".format(n_codes, r_detected, r_detected_in_neg))
     
     # --- Visualize
+    col_label = MatchmakerFeatureSet.col_target  # 'label'
     df_pos = DataFrame(pos_instances, columns=attributes)
-    df_pos['label'] = 1
+    df_pos[col_label] = 1
     df_neg = DataFrame(neg_instances, columns=attributes)
-    df_neg['label'] = 0
+    df_neg[col_label] = 0
     # X = np.vstack([pos_instances, neg_instances])
     # y = np.vstack([np.repeat(1, len(pos_instances)), np.repeat(0, len(neg_instances))])
 
@@ -1393,6 +1394,7 @@ def demo_create_vars_part2(**kargs):
     
     # Output parameters
     cohort = kargs.get('cohort', 'hepatitis-c')
+    col_label = kargs.get('label', MatchmakerFeatureSet.col_target)
 
     # Data parameters
     tScale = False  # set zcore = 1 within clustermap() instead
@@ -1410,7 +1412,7 @@ def demo_create_vars_part2(**kargs):
     n_display = 10
     vtype = subject = kargs.get('vtype', 'tfidf')
 
-    cols_y = ['label', ]
+    cols_y = [col_label, ]
     cols_untracked = []
     # ---------------------------------------------
 
@@ -1427,13 +1429,13 @@ def demo_create_vars_part2(**kargs):
 
     # limit sample size to unclutter plot 
     n_samples = 50
-    df_match = down_sample(df_match, col_label='label', n_samples=n_samples)
-    df_match = df_match.sort_values(by=['label', ], ascending=True)
+    df_match = down_sample(df_match, col_label=col_label, n_samples=n_samples)
+    df_match = df_match.sort_values(by=[col_label, ], ascending=True)
     df_match = relabel(df_match)
     # ---------------------------------------------
 
-    df_pos = df_match[df_match['label']==1]
-    df_neg = df_match[df_match['label']==0]
+    df_pos = df_match[df_match[col_label]==1]
+    df_neg = df_match[df_match[col_label]==0]
 
     # -- perturb the negative examples by a small random noise
     # ep = np.min(df_pos.values[df_pos.values > 0])
@@ -1442,8 +1444,8 @@ def demo_create_vars_part2(**kargs):
     # df_match = pd.concat([df_pos, df_neg])
 
     # ---------------------------------------------
-    # labels = df_match.pop('label')  # this is an 'inplace' operation
-    labels = df_match['label']  # labels: a Series
+    # labels = df_match.pop(col_label)  # this is an 'inplace' operation
+    labels = df_match[col_label]  # labels: a Series
     n_labels = np.unique(labels.values)
     # ---------------------------------------------
 
@@ -1502,10 +1504,10 @@ def demo_create_vars_part2(**kargs):
     ################################################
     df_match = pd.read_csv(input_path, sep=",", header=0, index_col=None, error_bad_lines=False)
     n_samples = 50
-    df_match = down_sample(df_match, col_label='label', n_samples=n_samples)
+    df_match = down_sample(df_match, col_label=col_label, n_samples=n_samples)
     df_match = relabel(df_match)
-    df_pos = df_match[df_match['label']==1]
-    df_neg = df_match[df_match['label']==0]
+    df_pos = df_match[df_match[col_label]==1]
+    df_neg = df_match[df_match[col_label]==0]
     # ... no X scaling
 
     # --- Enhanced heatmap 
@@ -1526,7 +1528,7 @@ def demo_create_vars_part2(**kargs):
 
     # read in the data again 
     df_match = pd.read_csv(input_path, sep=",", header=0, index_col=None, error_bad_lines=False)
-    df_match = down_sample(df_match, col_label='label')
+    df_match = down_sample(df_match, col_label=col_label)
     X, y, fset, lset = toXY(df_match, cols_y=cols_y, scaler='standardize')
 
     # print("... dim(X): {} => X=\n{}\n".format(X.shape, X))

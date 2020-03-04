@@ -86,30 +86,60 @@ def build_tfidf_model(cohort='hepatitis-c', df_src=None, target_cols=[], **kargs
     return model
 
 def partition(df, verbose=1):
+    """
+
+    Memo
+    ----
+    1. "df" is the source data (not the transformed data), therefore we need to use 
+            MatchmakerFeatureSet.categorize_features() 
+
+            INSTEAD OF  
+
+            MatchmakerFeatureSet.categorize_transformed_features()
+
+    """
     matching_cols = MatchmakerFeatureSet.matching_cols
-    cat_cols = MatchmakerFeatureSet.cat_cols
-    cont_cols = MatchmakerFeatureSet.cont_cols
-    derived_cols = MatchmakerFeatureSet.derived_cols
-    target_cols = MatchmakerFeatureSet.target_cols
+    # cat_cols = MatchmakerFeatureSet.cat_cols
+    # cont_cols = MatchmakerFeatureSet.cont_cols
+    # derived_cols = MatchmakerFeatureSet.derived_cols
+    # target_cols = MatchmakerFeatureSet.target_cols
     high_card_cols = MatchmakerFeatureSet.high_card_cols
+
+    matching_vars, regular_vars, target_vars, derived_vars, meta_vars = \
+        MatchmakerFeatureSet.categorize_features(df, remove_prefix=False)
+    assert len(matching_vars) <= len(matching_cols)
 
     # reg_vars_cols = cont_cols + cat_cols  # + derived_cols (e.g. count)
     # ... probably need to infer cols(X) because df may be a transformed dataframe
-    V = list(df.columns)
-    vars_cols = sorted(set(V)-set(matching_cols)-set(target_cols)-set(derived_cols), key=V.index)
+    # V = list(df.columns)
+    # vars_cols = sorted(set(V)-set(matching_cols)-set(target_cols)-set(derived_cols), key=V.index)
 
-    dfM = df[matching_cols]
-    dfX = df[vars_cols]
-    dfY = df[target_cols]
+    dfM = df[matching_vars]
+    dfX = df[regular_vars]
+    dfY = df[target_vars]
+    dfD = df[derived_vars] if len(derived_vars) > 0 else DataFrame()
+    dfZ = df[meta_vars] if len(meta_vars) > 0 else DataFrame()
 
     if verbose: 
         print("(partition) {} matching vars | {} reg vars | {} label vars".format(dfM.shape[1], dfX.shape[1], dfY.shape[1]))
         # [log]  8 matching vars | 70 reg vars | 1 label vars
 
-    return (dfM, dfX, dfY)
+    return (dfM, dfX, dfY, dfD, dfZ)
 
 def tranform_and_encode(df, fill_missing=True, token_default='unknown', 
         drop_high_missing=False, pth_null=0.9, verbose=1):
+    """
+    Transform the non-matching variables (i.e. all variables NOT used to match
+    with the LOINC decriptions such as meta_sender_name, test_order_code, test_result_code). 
+
+    Matching variables are the T-attributes that carry text values (e.g. test_order_name, test_result_name)
+    Non-matching variables are typically not text-valued columns
+
+    Input
+    -----
+    df: source training data 
+
+    """
     from analyzer import col_values
     from transformer import encode_vars 
 
@@ -120,16 +150,25 @@ def tranform_and_encode(df, fill_missing=True, token_default='unknown',
     target_cols = MatchmakerFeatureSet.target_cols
     high_card_cols = MatchmakerFeatureSet.high_card_cols
 
+    matching_vars, regular_vars, target_vars, derived_vars, meta_vars = \
+        MatchmakerFeatureSet.categorize_features(df, remove_prefix=False)
+    # ...note 
+    #    regular_vars: non-matching columns (e.g. meta_sender_name, test_order_code, test_result_code, ...)
+
     # --- transform variables
-    MatchmakerFeatureSet.to_age(df)
+    FeatureSet.to_age(df)
     values = col_values(df, col='age', n=10)
     print("[transform] age: {}".format(values))
 
-    V = cont_cols + cat_cols  # + derived_cols (e.g. count)
-    L = target_cols
-    dfM = df[matching_cols]
-    dfX = df[V]
-    dfY = df[L]
+    # V = cont_cols + cat_cols  # + derived_cols (e.g. count)
+    # L = target_cols
+    dfM = df[matching_cols] # T-attributes that carry text values
+    dfX = df[regular_vars]
+    dfY = df[target_vars]
+
+    # optinal variables
+    dfD = df[derived_vars] if len(derived_vars) > 0 else DataFrame()
+    dfZ = df[meta_vars] if len(meta_vars) > 0 else DataFrame()
 
     if fill_missing:  
         # dfM.fillna(value=token_default, inplace=True)
@@ -155,7 +194,7 @@ def tranform_and_encode(df, fill_missing=True, token_default='unknown',
         print("[encode] dim(dfX-): {}, dim(dfX+): {}".format(dim0, dfX.shape))
         # [log] ... [encode] dim(dfX-): (64979, 13), dim(dfX+): (64979, 97)
 
-    return (dfM, dfX, dfY, encoder)
+    return (dfM, dfX, dfY, dfD, dfZ, encoder)
 
 def regular_feature_transform(df, **kargs):
     tDropHighMissing = kargs.get('drop_high_missing', False)
@@ -164,9 +203,13 @@ def regular_feature_transform(df, **kargs):
     token_default = kargs.get("token_default", LoincTSet.token_default)
 
     N0, Nv0 = df.shape
-    dfM, dfX, dfY, _ = tranform_and_encode(df, fill_missing=True, token_default=token_default, 
-                        drop_high_missing=tDropHighMissing, pth_null=pth_null)
-    df = pd.concat([dfM, dfX, dfY], axis=1)
+    dfM, dfX, dfY, dfD, dfZ, encoder = \
+         tranform_and_encode(df, fill_missing=True, token_default=token_default, 
+                drop_high_missing=tDropHighMissing, pth_null=pth_null)
+    # ... transform and encode only deals with X i.e. regular variables (i.e. non-matching variables)
+    
+    df = pd.concat([dfM, dfX, dfY, dfD, dfZ], axis=1) # matching, regular, target, derived, meta  
+    
     assert df.shape[0] == N0
     if verbose: highlight("[transform] dim of vars: {} -> {}".format(Nv0, df.shape[1]))
     return df
@@ -236,6 +279,14 @@ def text_feature_transform(df, **kargs):
                         process_string(loinc_lookup[code_x][col_loinc]), score, code_x, label)
         if print_: print(msg)
         return msg
+    def melt_rules(matching_rules): 
+        t_attributes = set([])
+        l_descriptors = set([])
+        for tattr, descriptors in matching_rules.items(): 
+            t_attributes.add(tattr)
+            l_descriptors.update(descriptors)
+        return list(t_attributes), list(l_descriptors)
+
     from analyzer import load_src_data
     from data_processor import toXY
 
@@ -272,10 +323,10 @@ def text_feature_transform(df, **kargs):
     tDropHighMissing = kargs.get('drop_high_missing', False)
     tAddRegularVars = kargs.get('add_regular_vars', False)
 
-    # --- transform, encode and separate matchmaking variables
-    dfM, dfX, dfY = partition(df)
+    dfM, dfX, dfY, df_derived, df_meta = partition(df)  # df: is source data
     df = pd.concat([dfM, dfY], axis=1)
     # ... df: redefined to only include matchmaking variables + target (e.g. LOINC code)
+    # ... why? because then we could append dfX as a separate process to incorporate non-matching variables when desired
 
     # --- Define matching rules
     ######################################
@@ -336,8 +387,34 @@ def text_feature_transform(df, **kargs):
     n_codes = 0
     n_comparisons_pos = n_comparisons_neg = 0 
     n_detected = n_detected_in_negatives = 0
+    
+    # training data based on the matching between T-attributes and LOINC descriptors
+    ##################################
     pos_instances = []
     neg_instances = []
+
+    # meta data
+    ##################################
+
+    # init meta data schema
+    pos_label = MatchmakerFeatureSet.pos_label  # 1
+    neg_label = MatchmakerFeatureSet.neg_label  # 0
+    stypes = [pos_label, neg_label]  # sample types
+    col_assignment = 'assignment'
+    meta_data = {stype:{} for stype in stypes}
+    target_cols, target_descriptors = melt_rules(matching_rules)
+    meta_attributes = MatchmakerFeatureSet.meta_cols 
+    # [col_assignment, ] + target_cols + target_descriptors  # test_result_loinc_code, test_order_name, test_result_name, ... 
+    for stype, entry in meta_data.items(): 
+        meta_data[stype] = {ma: [] for ma in meta_attributes}
+  
+    # LOINC 
+    # pos_codes = []
+    # neg_codes = []
+
+    df_index = []   # data index
+    ##################################
+
     attributes = []
     N0 = df.shape[0]
     feature_suffices = ['sdist', 'tfidf', ] # has to be in accordance with compute_similarity_with_loinc()
@@ -347,7 +424,7 @@ def text_feature_transform(df, **kargs):
         if n_codes % 10 == 0: print("[transform] Processing code #{}: {}  ...".format(n_codes, code))
         if code in LoincTSet.null_codes: continue
         if not code in loinc_lookup: 
-            codes_missed.add(code)
+            codes_missed.add(code)  
 
         # indices = dfc.index.values
         for r, row in dfc.iterrows():   # r ~ df.index
@@ -374,6 +451,8 @@ def text_feature_transform(df, **kargs):
                             target_cols=target_cols, target_descriptors=target_descriptors) # target_descriptors
 
                 # --- Other models 
+
+                # a. regular variables
                 row_X = dfX.iloc[r]   # df now does not have the same index as dfX
                 sv3 = row_X.values
                 attr3 = dfX.columns.values
@@ -381,12 +460,21 @@ def text_feature_transform(df, **kargs):
                 if len(attributes) == 0: 
                     # attributes = np.hstack([attr1, attr2])
                     attributes = FeatureSet.join_features([attr1, attr2], feature_suffices)
-                    print("[transform] (before) feature set (n={}):\n{}\n".format(len(attributes), attributes))
-                    if tAddRegularVars: attributes = np.hstack([attr3, attributes])
-                    print("[transform] (after)  feature set (n={}):\n{}\n".format(len(attributes), attributes))
+                    if tAddRegularVars: 
+                        print("[transform] (before) feature set (n={}):\n{}\n".format(len(attributes), attributes))
+                        attributes = np.hstack([attr3, attributes])
+                        print("[transform] (after)  feature set (n={}):\n{}\n".format(len(attributes), attributes))
 
                 sv = np.hstack([sv1, sv2, sv3]) if tAddRegularVars else np.hstack([sv1, sv2])
                 pos_instances.append(sv)  # sv: a vector of similarity scores
+
+                # keep track of meta data (e.g. LOINC assignment itself)
+                meta_data[pos_label][col_assignment].append(code)
+                for tcol in MatchmakerFeatureSet.matching_cols:
+                    meta_data[pos_label][tcol].append(row[tcol]) 
+                for dcol in MatchmakerFeatureSet.descriptors: 
+                    meta_data[pos_label][dcol].append(loinc_lookup[code][dcol])
+                # df_index.append(r)  # ... not useful for keeping track of negative samples
 
                 #########################################################################
                 if verify: 
@@ -443,12 +531,22 @@ def text_feature_transform(df, **kargs):
                                     target_cols=target_cols, target_descriptors=target_descriptors) # target_descriptors
  
                         # --- Other models 
+
+                        # a. regular variables
                         row_X = dfX.iloc[r]   # df now does not have the same index as dfX
                         sv3 = row_X.values
                         attr3 = dfX.columns.values
+                        # ... original row attributes remain fixed regardless of the negative LOINC code
                         
                         sv = np.hstack([sv1, sv2, sv3]) if tAddRegularVars else np.hstack([sv1, sv2])
                         neg_instances.append(sv)  # sv: a vector of similarity scores
+
+                        # keep track of meta data
+                        meta_data[neg_label][col_assignment].append(code_neg)
+                        for tcol in MatchmakerFeatureSet.matching_cols:
+                            meta_data[neg_label][tcol].append(row[tcol])  # this is the same as the postives ... 
+                        for dcol in MatchmakerFeatureSet.descriptors: 
+                            meta_data[neg_label][dcol].append(loinc_lookup[code_neg][dcol]) # ... but now the assignment changes to the negative
                         
                         # ------------------------------------------------
                         if verify: 
@@ -490,15 +588,79 @@ def text_feature_transform(df, **kargs):
         X = np.array(pos_instances)
     else:
         X = np.vstack([pos_instances, neg_instances])
-        y = np.hstack([np.repeat(1, len(pos_instances)), np.repeat(0, len(neg_instances))])
+        y = np.hstack([np.repeat(pos_label, len(pos_instances)), np.repeat(neg_label, len(neg_instances))])
 
     print("[transform] from n(df)={}, we created n={} training instances".format(N0, X.shape[0]))
+
+    # meta_data['assignment'] = np.hstack(pos_codes, neg_codes)
+    # assert len(meta_data['assignment']) == len(y)
     
     if save: 
         pass  
 
     # note:        
-    return X, y, attributes
+    return X, y, attributes, meta_data
+
+def text_feature_transform2(df, **kargs): 
+    def add_meta_data(ts, meta_data={}, is_test_data=False, col_target='', token_default=""):
+        if not col_target: col_target = MatchmakerFeatureSet.col_target
+        pos_label = MatchmakerFeatureSet.pos_label
+        neg_label = MatchmakerFeatureSet.neg_label
+
+        labels = [pos_label, neg_label]
+        assert np.all([label in meta_data for label in labels]), "labels: {}, meta_keys: {}".format(list(labels), list(meta_data.keys()))
+
+        if is_test_data: 
+            
+            ts_meta_pos = DataFrame(meta_data[pos_label], columns=meta_data[pos_label].keys())
+            # ts_meta_neg = DataFrame({}, columns=meta_data[pos_label].keys()) 
+
+            ts_meta = ts_meta_pos
+
+        else:
+
+            ts_pos = ts[ts[col_target]==pos_label]
+            ts_neg = ts[ts[col_target]==neg_label]
+
+            ts_meta_pos = DataFrame(meta_data[pos_label], columns=meta_data[pos_label].keys())
+            ts_meta_neg = DataFrame(meta_data[neg_label], columns=meta_data[neg_label].keys())
+            assert ts_meta_pos.shape[1] == ts_meta_neg.shape[1]
+
+            # we do not necessarily have negative examples (e.g. test data
+            nRef = len(meta_data[1]['test_order_name'])
+            assert ts_meta_pos.shape[0] == ts_pos.shape[0], "ts_meta_pos(n={}) <> ts_pos(n={}) | n(ref): {}".format(
+                         ts_meta_pos.shape[0], ts_pos.shape[0], nRef)
+            assert ts_meta_neg.shape[0] == ts_neg.shape[0], "ts_meta_neg(n={}) <> ts_neg(n={})".format(ts_meta_neg.shape[0], ts_neg.shape[0])
+     
+            ts_meta = pd.concat([ts_meta_pos, ts_meta_neg], ignore_index=True)
+
+        # ... now we have the meta dataframe ready
+
+        # fill missing
+        ts_meta.fillna(value=token_default, inplace=True)
+    
+        return pd.concat([ts, ts_meta], axis=1)
+
+    col_label = kargs.get('label', MatchmakerFeatureSet.col_target)
+    tAddMetaData = kargs.get("add_meta_data", True)
+    label_unknown = kargs.get("label_placeholder", -1) 
+
+    X, y, attributes, meta_data = text_feature_transform(df, **kargs)
+    ts = DataFrame(X, columns=attributes)
+
+    isTestData = False
+    if len(y) > 0: 
+        assert len(y) == X.shape[0]
+        ts[col_label] = y
+    else: 
+        # test data
+        ts[col_label] = label_unknown
+        isTestData = True
+
+    if tAddMetaData: 
+        ts = add_meta_data(ts, meta_data, is_test_data=isTestData)
+    
+    return ts
 
 def select_reliable_positive(cohort, method='classifier'):
     if method.startswith('class'): # use classifier array result as heuristics
@@ -569,9 +731,16 @@ def demo_create_training_data(**kargs):
     col_mval = LoincMTRT.col_value
     col_mkey = LoincMTRT.col_key       # loinc codes in the mtrt table
 
+    # matchmaker training data parameters 
+    col_pos_assign = "pos_code"   # positive assignment (LOINC being correct)
+    col_neg_assign = "neg_code"   # negative assignment
+
     # Data parameters 
     tAddRegularVars = False
     tDropHighMissing = True
+    tAddMetaData = True
+    tShuffle = True
+    token_default = ""
 
     # TF-IDF parameters
     ngram_range = kargs.get('ngram_range', (1,3))
@@ -585,11 +754,13 @@ def demo_create_training_data(**kargs):
     target_descriptors = [col_sn, col_ln, col_com, col_sys, ]
 
     # note that sometimes we may also want to compare with MTRT
-    matching_rules = { 'test_order_name': [col_sn, col_ln, col_com, ],  # col_sys
-                       'test_result_name': [col_sn, col_ln, col_com,  ], #  col_sys, col_prop
-                       # 'test_specimen_type': [col_sys, ], 
-                       # 'test_result_units_of_measure': [col_sn, col_prop], }
-                       }
+    matching_rules = kargs.get('matching_rules', 
+                                    { 'test_order_name': [col_sn, col_ln, col_com, ],  # col_sys
+                                       'test_result_name': [col_sn, col_ln, col_com,  ], #  col_sys, col_prop
+                                       # 'test_specimen_type': [col_sys, ], 
+                                       # 'test_result_units_of_measure': [col_sn, col_prop], }
+                                       }
+                       )
     ######################################
 
     # --- Cohort definition (based on target condition and classifier array performace)
@@ -602,7 +773,7 @@ def demo_create_training_data(**kargs):
     df_src = regular_feature_transform(df_src, drop_high_missing=False, pth_null=0.9)
     # ... drop_high_missing only work on non-matchmaking variables
     # ... todo: load_transform
-    print("(demo) After reg feature transform | cols(df):\n{}\n".format(df_src.columns))
+    print("(demo) After reg feature transform | cols(df):\n{}\n".format(list(df_src.columns)))
 
     codesAll = df_src[col_target].unique()
     ######################################
@@ -616,25 +787,29 @@ def demo_create_training_data(**kargs):
     ts = df_src.loc[df_src[col_target].isin(codesRP)] # don't use this
     # ts = select_samples_by_loinc(ts, target_codes=codesRP, target_cols=target_cols)
    
-    X_train, y_train, attributes = \
-        text_feature_transform(ts, target_cols=target_cols, df_src=df_src, 
-                matching_rules=matching_rules, 
+    # X_train, y_train, attributes, meta_data = \
+    ts_train = text_feature_transform2(ts, target_cols=target_cols, df_src=df_src, 
+                        matching_rules=matching_rules, 
 
-                tfidf_model=tfidf_model, 
-                ngram_range=ngram_range, max_features=max_features,  # TF-IDF model paramters
+                        tfidf_model=tfidf_model, 
+                        ngram_range=ngram_range, max_features=max_features,  # TF-IDF model paramters
 
-                target_codes=codesRP, 
-                n_per_code=3,
+                        target_codes=codesRP, 
+                        # ... generate feature vectors only on these LOINC codes (but redundant here since ts is already filtered accordingly)
+                        n_per_code=3,
 
-                add_regular_vars=tAddRegularVars
-                # ... generate feature vectors only on these LOINC codes (but redundant here since ts is already filtered accordingly)
-                ) 
+                        add_regular_vars=tAddRegularVars,
 
-    # --- Visualize
-    col_label = 'label'
-    ts_train = DataFrame(X_train, columns=attributes)
-    ts_train[col_label] = y_train
+                        # wrapper parameters 
+                        add_meta_data=tAddMetaData
 
+                    ) 
+
+    if tShuffle: 
+        ts_train = ts_train.sample(frac=1).reset_index(drop=True)
+
+    highlight("(demo) Created n={} training instances with m={} attributes.".format(ts_train.shape[0], ts_train.shape[1]))
+    
     n_display = 10
     vtype = subject = 'tfidf'
 
@@ -660,23 +835,24 @@ def demo_create_training_data(**kargs):
     # ts = select_samples_by_loinc(ts, target_codes=codesTest target_cols=target_cols)
     # ... can deter this step until text_eature_transform
 
-    X_test, _, _ = \
-        text_feature_transform(ts, target_cols=target_cols, df_src=df_src, 
-                matching_rules=matching_rules, 
+    # X_test, y_test, _, meta_data = \
+    ts_test = text_feature_transform2(ts, target_cols=target_cols, df_src=df_src, 
+                    matching_rules=matching_rules, 
 
-                tfidf_model=tfidf_model,
-                ngram_range=ngram_range, max_features=max_features,  # TF-IDF model paramters
+                    tfidf_model=tfidf_model,
+                    ngram_range=ngram_range, max_features=max_features,  # TF-IDF model paramters
 
-                target_codes=codesTest, 
-                n_per_code=3,
+                    target_codes=codesTest, 
+                    n_per_code=3,
 
-                gen_negative=False, # don't generate negative exmaples
-                add_regular_vars=tAddRegularVars
+                    gen_negative=False, # don't generate negative exmaples
+                    add_regular_vars=tAddRegularVars, 
+
+                    # wrapper parameters 
+                    add_meta_data=tAddMetaData
 
                 ) 
-    print("(demo) dim(X_test): {}, n(attributes): {}".format(X_test.shape, len(attributes)))
-    ts_test = DataFrame(X_test, columns=attributes)
-    ts_test[col_label] = -1 # only a placeholder
+    print("(demo) dim(ts_test): {}".format(ts_test.shape))
 
     output_file = f'matchmaker-test-{cohort}.csv'
     output_path = os.path.join(datadir, output_file)
@@ -745,14 +921,22 @@ def visualize_training_data(ts, **kargs):
     # sns.palplot(sns.color_palette("coolwarm", 7))
     # sns.palplot(palette)
     # ---------------------------------------------
-    col_label = kargs.get('col_label', 'label')
+    col_label = kargs.get('col_label', MatchmakerFeatureSet.col_target)
     cohort = kargs.get('cohort', config.cohort)
     vtype = subject = kargs.get('vtype', 'combined')
     n_samples = kargs.get('n_samples', 50)
 
-    cols_y = ['label', ]
+    cols_y = [col_label, ]
     cols_untracked = []
     # ---------------------------------------------
+
+    # -- Filter unwanted variables such as meta data
+    matching_vars, regular_vars, target_vars, derived_vars, meta_vars = \
+        MatchmakerFeatureSet.categorize_transformed_features(ts, remove_prefix=False)
+
+    # -- here, we are only interested in matching variables
+    highlight("(demo) Found n={} matching vars:\n{}\n".format(len(matching_vars), matching_vars))
+    ts = ts.drop(meta_vars, axis=1) # [matching_vars+target_vars]
 
     # n_samples: limit sample size to unclutter plot 
     df_match = down_sample(ts, col_label=col_label, n_samples=n_samples)
@@ -771,7 +955,7 @@ def visualize_training_data(ts, **kargs):
     # df_match = pd.concat([df_pos, df_neg])
 
     # ---------------------------------------------
-    # labels = df_match.pop('label')  # this is an 'inplace' operation
+    # labels = df_match.pop('match_status')  # this is an 'inplace' operation
     labels = df_match[col_label]  # labels: a Series
     n_labels = np.unique(labels.values)
     # ---------------------------------------------
@@ -943,20 +1127,45 @@ def load_dataset(dtype, **kargs):
     cohort = kargs.get('cohort', config.cohort)
     input_dir = kargs.get("data", config.data_dir)  # e.g. /Users/<user>/work/data
     sep = kargs.get('sep', ",")
+    verbose = kargs.get("verbose", 1)
 
-    tMatchingVarsOnly = kargs.get("matching_vars_only", False)
+    tMatchingVarsOnly = kargs.get("matching_vars_only", False) # if False, will also include regular variables if they exist
+    tIncludeMeta = kargs.get("include_meta", False)
+    tIncludeDerived = kargs.get("include_derived", False)
+
     matching_cols = kargs.get("matching_cols", ['test_order_name', 'test_result_name'])
 
     input_path = os.path.join(input_dir, "matchmaker-{}-{}.csv".format(dtype, cohort))  
 
     ts = pd.read_csv(input_path, sep=sep, header=0, index_col=None, error_bad_lines=False)
-    matching_vars, regular_vars, target_vars = MatchmakerFeatureSet.categorize_features(ts, remove_prefix=False)
-    assert len(matching_vars) > len(matching_cols)
+
+    matching_vars, regular_vars, target_vars, derived_vars, meta_vars = \
+        MatchmakerFeatureSet.categorize_transformed_features(ts, remove_prefix=False)
+    # assert len(matching_vars) > len(matching_cols)
+    print("[load] matching_vars: {}".format(matching_vars))
+    print("...    regular_vars:  {}".format(regular_vars))
+    print("...    target vars:   {}".format(target_vars))
+    print("...    meta_vars:     {}".format(meta_vars))
 
     if tMatchingVarsOnly: 
         tsX = ts[matching_vars]
         tsY = ts[target_vars]
         ts = pd.concat([tsX, tsY], axis=1)
+
+    else:
+        tsX = ts[matching_vars+regular_vars]
+        tsY = ts[target_vars]
+
+        # meta variables and derived variables
+        tsM = tsD = DataFrame()
+        if tIncludeMeta and len(meta_vars) > 0: 
+            if verbose: print("(load_dataset) Found meta data: {}".format(meta_vars))
+            tsM = ts[meta_vars]
+        if tIncludeDerived and len(derived_vars) > 0: 
+            if verbose: print("(load_dataset) Found derived variables: {}".format(derived_vars))
+            tsD = ts[derived_vars]
+
+        ts = pd.concat([tsX, tsY, tsD, tsM], axis=1)
 
     print("(load_dataset) dim({}): {}".format(dtype, ts.shape))
     return ts
@@ -967,7 +1176,7 @@ def filter_features(ts, scaler=None):
 
     # matching_cols = kargs.get("matching_cols", ['test_order_name', 'test_result_name'])
     print("[filter] cols(ts):\n{}\n".format(ts.columns.values))
-    matching_vars, regular_vars, target_vars = MatchmakerFeatureSet.categorize_features(ts)
+    matching_vars, regular_vars, target_vars, derived_cols, meta_cols = MatchmakerFeatureSet.categorize_transfromed_features(ts)
     fX = matching_vars + regular_vars
     print("... matching_vars:\n{}\n".format(matching_vars))
 
@@ -1006,8 +1215,10 @@ def demo_fearture_analysis(**kargs):
     tAddRegularVars = False
 
     # load training data
-    ts_train = load_dataset(dtype='train') 
-    # ts_train = filter_features(ts_train)
+    ts_train = load_dataset(dtype='train', include_derived=False, include_meta=False) 
+    # ... visualization does not require meta variables
+    
+    # ts_train = filter_features(ts_train) 
 
     # ts_train = balance_by_downsampling2(ts_train, cols_y=[LoincTSet.col_target, ], method='multiple', majority_max=1, verify=1)
     visualize_training_data(ts_train, n_samples=50, verbose=1)

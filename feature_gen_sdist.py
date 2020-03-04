@@ -24,7 +24,7 @@ from CleanTextData import *
 import common
 import transformer
 import loinc
-from loinc import LoincTSet, LoincTable
+from loinc import LoincTSet, LoincTable, FeatureSet, MatchmakerFeatureSet
 from loinc_mtrt import LoincMTRT 
 import loinc_mtrt as lmt
 
@@ -404,13 +404,13 @@ def combine_loinc_mapping(verbose=1, save=True, **kargs):
     return loincmap, short_to_long, parsed_loinc_fields
 
 def load_loincmap(input_dir='data', input_file='', **kargs):
-    cohort = kargs.get('cohort', 'generic')
+    # cohort = kargs.get('cohort', 'generic')
     sep = kargs.get('sep', ',')
     verbose = kargs.get('verbose', 1)
     exception_ = kargs.get('exception_', False)
 
     if not input_dir: input_dir = os.path.join(os.getcwd(), input_dir) # os.path.join(os.getcwd(), 'result')
-    if not input_file: input_file = f"loincmap-{cohort}.csv" 
+    if not input_file: input_file = "loincmap.csv"  # cohort independent for now
     input_path = os.path.join(input_dir, input_file)
     if os.path.exists(input_path): 
         df = pd.read_csv(input_path, sep=sep, header=0, index_col=None, error_bad_lines=False)
@@ -428,13 +428,14 @@ def load_loincmap(input_dir='data', input_file='', **kargs):
     return df
 
 def save_loincmap(df, output_dir='data', output_file='', **kargs): 
-    cohort = kargs.get('cohort', 'hepatitis-c')
+    # cohort = kargs.get('cohort', 'hepatitis-c')
     sep = kargs.get('sep', ',')
     verbose = kargs.get('verbose', 1)
     n_display = kargs.get('n_display', 200)
 
     output_dir = kargs.get('output_dir', os.path.join(os.getcwd(), output_dir)) 
-    output_file = f"loincmap-{cohort}.csv" 
+    # output_file = f"loincmap-{cohort}.csv" 
+    if not output_file: output_file = "loincmap.csv"
     output_path = os.path.join(output_dir, output_file)
     df.to_csv(output_path, sep=sep, index=False, header=True)
 
@@ -446,7 +447,7 @@ def save_loincmap(df, output_dir='data', output_file='', **kargs):
     return
 
 def load_match_matrix(input_file='', metric='JW', **kargs):
-    cohort = kargs.get('cohort', 'generic')
+    # cohort = kargs.get('cohort', 'generic')
     sep = kargs.get('sep', ',')
     verbose = kargs.get('verbose', 1)
     exception_ = kargs.get('exception_', False)
@@ -454,9 +455,9 @@ def load_match_matrix(input_file='', metric='JW', **kargs):
     input_dir = kargs.get('input_dir', 'data') # os.path.join(os.getcwd(), 'result')
     if not input_file: 
         if metric: 
-            input_file = f"match_matrix-{metric}-{cohort}.csv"  # test tokens vs loinc tokens
+            input_file = f"match_matrix-{metric}.csv"  # test tokens vs loinc tokens
         else: 
-            input_file = f"match_matrix-{cohort}.csv" 
+            input_file = "match_matrix.csv" 
     input_path = os.path.join(input_dir, input_file)
 
     if os.path.exists(input_path): 
@@ -473,7 +474,7 @@ def load_match_matrix(input_file='', metric='JW', **kargs):
         df = None
     return df 
 def save_match_matrix(df, output_file='', metric='JW', **kargs):
-    cohort = kargs.get('cohort', 'hepatitis-c')
+    # cohort = kargs.get('cohort', 'hepatitis-c')
     sep = kargs.get('sep', ',')
     verbose = kargs.get('verbose', 1)
     # n_display = kargs.get('n_display', 200)
@@ -481,9 +482,9 @@ def save_match_matrix(df, output_file='', metric='JW', **kargs):
     output_dir = kargs.get('output_dir', 'data') 
     if not output_file: 
         if metric: 
-            output_file = f"match_matrix-{metric}-{cohort}.csv"  # test tokens vs loinc tokens
+            output_file = f"match_matrix-{metric}.csv"  # test tokens vs loinc tokens
         else: 
-            output_file = f"match_matrix-{cohort}.csv" 
+            output_file = "match_matrix.csv" 
     output_path = os.path.join(output_dir, output_file)
     df.to_csv(output_path, sep=sep, index=False, header=True)
     return
@@ -1301,6 +1302,8 @@ def compute_similarity_with_loinc(row, code, target_cols=[], loinc_lookup={}, va
         dfv = vars_lookup[query]  # col
         dfv.fillna("", inplace=True)
         dfvi = dfv.loc[dfv[query] == t_text]
+
+        # [test]
         #################################################
         if dfvi.shape[0] != 1: 
             msg = "Found n={} rows matching {}=\"{}\" ...\n".format(dfvi.shape[0], query, t_text)
@@ -1600,7 +1603,7 @@ def demo_create_vars_init(save=False):
     unique_codes = dfp[col_target].unique()
     N_ucodes = len(unique_codes)
 
-    loincmap = load_loincmap(cohort=cohort)
+    loincmap = load_loincmap() # cohort independent for now
     if loincmap is None: 
         print("(feature) Recomputing loincmap ...")
         loincmap, short_to_long, parsed_loinc_fields = combine_loinc_mapping()
@@ -1863,13 +1866,14 @@ def demo_create_vars(**kargs):
     print("... There are n={} codes not found on the LONIC+MTRT corpus table:\n{}\n".format(len(codes_missed), codes_missed))
     r_detected = n_detected/(n_comparisons_pos+0.0)
     r_detected_in_neg = n_detected_in_negatives/(n_comparisons_neg+0.0)
-    print("...... Among N={} codes, r(detected): {}, r(detected in any -): {}".format(n_codes, r_detected, r_detected_in_neg))
+    print("...... Among N={} codes, r(detected): {}, r(detected in any -): {} | method=\"sdist\"".format(n_codes, r_detected, r_detected_in_neg))
 
     # --- Visualize
+    col_label = MatchmakerFeatureSet.col_target   # positive (1) or negative (0)
     df_pos = DataFrame(pos_instances, columns=attributes)
-    df_pos['label'] = 1
+    df_pos[col_label] = 1
     df_neg = DataFrame(neg_instances, columns=attributes)
-    df_neg['label'] = 0
+    df_neg[col_label] = 0
     # X = np.vstack([pos_instances, neg_instances])
     # y = np.vstack([np.repeat(1, len(pos_instances)), np.repeat(0, len(neg_instances))])
 
@@ -1926,7 +1930,7 @@ def test_csv_to_excel(input_file='', **kargs):
     sep = kargs.get('sep', ',')
     verbose = kargs.get('verbose', 1)
     input_dir = kargs.get('input_dir', os.path.join(os.getcwd(), input_dir)) 
-    input_file = f"loincmap-{cohort}.csv" 
+    input_file = f"loincmap.csv" 
     input_path = os.path.join(input_dir, input_file)
     
     df.to_csv(input_path, sep=sep, index=False, header=True)
@@ -2047,8 +2051,8 @@ def test():
     # demo_string_distance()
 
     # --- features based on string distances
-    # demo_create_vars_init()
-    # demo_create_vars()
+    demo_create_vars_init()
+    demo_create_vars()
     demo_create_vars_part2()
 
     # --- Test Utilities

@@ -74,6 +74,7 @@ def analyze_path(X, y, model=None, p_grid={}, best_params={}, feature_set=[], n_
     from sklearn.model_selection import train_test_split # Import train_test_split function
     from utils_tree import visualize, count_paths, count_paths2, count_features2
     import time
+    from analyzer import det_range, det_range2
     
     #### parameters ####
     test_size = kargs.get('test_size', 0.2)
@@ -136,6 +137,10 @@ def analyze_path(X, y, model=None, p_grid={}, best_params={}, feature_set=[], n_
     for i in range(n_trials): 
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=i) # 70% training and 30% test
         print("[{}] dim(X_test): {}".format(i, X_test.shape))
+
+        # [test]
+        print("[test] Feature value range ...")
+        det_range2(X_train, y_train, fset=feature_set, pos_label=1)
 
         # model = model.set_params(**best_params).fit(X_train, y_train)
         model = apply_model(X_train, y_train, model=model, params=best_params) 
