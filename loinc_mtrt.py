@@ -19,7 +19,7 @@ class LoincMTRT(object):
     header = [col_code, col_value]
 
     table = 'loinc-leela.csv'
-    table_prime = 'loinc-leela-derived.csv'
+    table_derived = table_prime = 'loinc-leela-derived.csv'
 
     stop_words = ["IN", "FROM", "ON", "OR", "OF", "BY", "AND", "&", "TO", "BY", "", " "]
     delimit = ','

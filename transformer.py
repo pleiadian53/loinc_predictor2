@@ -1,6 +1,7 @@
 import category_encoders as ce
 import numpy as np
 import pandas as pd
+import text_processor as tproc
 
 def encode_vars_via_lookup(fset, feature_lookup): 
     # import category_encoders as ce
@@ -112,8 +113,7 @@ def preprocess_text_simple(df=None, col='', source_values=[], value_default=""):
     return text_processor.preprocess_text_simple(df=df, col=col, source_values=source_values, value_default=value_default)
 
 def remove_duplicates(s, sep=" "):
-    tokens = s.split(sep)
-    return sep.join(sorted(set(tokens), key=tokens.index))
+    return tproc.remove_duplicates(s, sep=sep)
 
 def join_feature_names(cols, sep='_'): 
     return remove_duplicates(sep.join(cols), sep=sep)
@@ -355,19 +355,20 @@ def take(n, iterable):
 # --- Complex Transfomration ---
 ###################################################
 
-def t_transformation(**kargs):
-    from analyzer import load_data
+def demo_transformation(**kargs):
+    from analyzer import load_data, load_src_data
 
-    df = load_data(input_file='andromeda-pond-hepatitis-c.csv', warn_bad_lines=False)
+    df = load_src_data(input_file='andromeda-pond-hepatitis-c.csv', warn_bad_lines=False)
     print("> input dim(df): {}".format(df.shape))
-    df = resolve_duplicate(df)
+    df = resolve_duplicate(df, col='count')
+    assert 'count' in df.columns
 
     return 
 
 def test(**kargs):
 
     # test all the feature-transformation functions  
-    t_transformation()
+    demo_transformation()
 
     return
 

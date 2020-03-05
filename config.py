@@ -1,30 +1,45 @@
-import loinc as lc
+import loinc as lc 
+# ... do not import loinc's classes from here
 import os
+
 ##### Configuration settings ########
+
+## This program assumes that you have collected raw laboratory data via transformations.withMedivoTestResultType()
+## See ai.prognos.samantha.clinical.transformations
+## 
+## Also, this program assumes that you have a disease cohort of interest and the set of target LOINC codes 
+## are determined through this disease cohort (e.g. Hepatitis-C). By focusing on a disesae-specific LOINC set
+## we can ensure that the LOINC we are trying to predict/correct are clinically related. 
+## 
 
 ## Data set configuration 
 cohort = domain = 'hepatitis-c'
+data_source = "andromeda-pond"
 
 project_path = os.getcwd()
 analysis_path = os.path.join(project_path, 'analysis')
-## This program assumes that you have collected raw laboratory data and aggregated it, grouping by [Lab Test Name, Specimen Type, Units, and LOINC code].
-## Using the aggregated groups, the summary measures used as features in the algorithm include [Mean, Minimum, Maximum, 5th Percentile, 25th Percentile, 
-## Median, 75th Percentile, 95th percentile, and Count]
-## The aggregate source data should be stored in a .txt, .csv, or .xls file
+loinc_dir = os.path.join(project_path, 'LoincTable') 
 
 ## Enter the directory where you would like the intermediate output files to be stored:
 ## Example: 'C:/Users/me/Documents/MyFiles/'
 data_dir = os.path.join(project_path, 'data')  # 'YOUR_DIRECTORY_HERE'
-outdir = data_dir
+out_dir = data_dir
 # ... alternative LoincTable
 
 plot_dir = os.path.join(project_path, 'plot')
 
 ## Enter the filepath where your raw source data file is located along with :
 ## Example: ## Example: 'C:/Users/me/Documents/MyFiles/Data.txt'
-in_file = os.path.join('data', f'andromeda-pond-{cohort}.csv') # 'YOUR_FILE_LOCATION_HERE'
-processed_file = os.path.join('data', f'andromeda-pond-{cohort}-processed.csv')
-backup_file = os.path.join('data', f'andromeda-pond-{cohort}-bk.csv')
+in_file = input_file = os.path.join(data_dir, f'{data_source}-{cohort}.csv') # 'YOUR_FILE_LOCATION_HERE'
+# ... e.g. andromeda-pond-hepatitis-c.csv
+
+processed_file = processed_input_file = os.path.join(data_dir, f'{data_source}-{cohort}-processed.csv')
+# ... e.g. andromeda-pond-hepatitis-c-processed.csv
+
+balanced_file = balanced_input_file = os.path.join(data_dir, f'{data_source}-{cohort}-balanced.csv')
+# ... e.g. andromeda-pond-hepatitis-c-balanced.csv
+
+backup_file = os.path.join(data_dir, f'{data_source}-{cohort}-bk.csv')
 ## ... other files: andromeda-pond-hepatitis-c.csv, andromeda-pond-hepatitis-c-balanced.csv
 ## ... note that "andromeda-pond-hepatitis-c-balanced.csv" may contain ill-formed meta_sender_name
 
@@ -59,8 +74,10 @@ write_file_umls_cuis = True
 
 ## Enter the full filepath to your local loinc.csv file installation:
 ## Example: 'C:/Users/me/Documents/MyFiles/loinc.csv'
-loinc_file_path = os.path.join('LoincTable', "Loinc.csv")  # lc.LoincTable.input_path or 'YOUR_LOINC_FILE_LOCATION'
-loinc_to_mtrt_file_path = os.path.join('data', )
+loinc_file_path = loinc_table_path = os.path.join(loinc_dir, 'Loinc.csv') # LoincTable.input_path   
+# ... os.path.join('LoincTable', 'Loinc.csv')  
+
+loinc_to_mtrt_file_path = os.path.join(data_dir, 'loinc-leela.csv')
 
 ## Enter the full filepath to your local R library file location (where stringdist package is installed)
 ## Example: 'C:/Program Files/R/R-3.4.1/library'
@@ -69,21 +86,8 @@ lib_loc = "/Library/Frameworks/R.framework/Versions/Current/Resources/library"
 
 ###########################################################################################
 
-## The program assumes that your raw source data file has a header with the following MANDATORY fields:
-##  1. Test Name
-##  2. Specimen Type
-##  3. Units (some missingness is tolerated by the algorithm)
-##  4. LOINC code (some missingness is tolerated by the algorithm)
-##  5. Numeric test result minimum
-##  6. Numeric test result maximum
-##  7. Numeric test result mean
-##  8. Numeric test result 5th percentile
-##  9. Numeric test result 25th percentile
-## 10. Numeric test result median
-## 11. Numeric test result 75th percentile
-## 12. Numeric test result 95th percentile
-## 13. Count (of total number of tests with the same [Test Name, Specimen Type, Units, and LOINC code])
-## 14. Site identifier
+## The program assumes that your raw source data file has a header with the features defined in 
+## loinc.FeatureSet 
 
 ## Enter the name of the column in your data source that contains the TEST NAME (i.e. Creatinine):
 test_col = test_order_col = 'test_order_name' 

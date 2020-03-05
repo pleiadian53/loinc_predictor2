@@ -61,9 +61,17 @@ def preprocess_text_simple(df=None, col='', source_values=[], value_default=""):
 # --- alias ---
 preprocess_text = preprocess_text_simple
 
-def process_string(s, doc_type='string'): 
+def remove_duplicates(s, sep=" "):
+    tokens = s.split(sep)
+    return sep.join(sorted(set(tokens), key=tokens.index))
+# --- alias ---
+remove_duplicate_tokens = remove_duplicates
+
+def process_string(s, doc_type='string', remove_dup=False): 
     if pd.isna(s): return ""
     sp = process_text(source_values=s, clean=True, standardized=True, doc_type=doc_type)[0]
+    if remove_dup: 
+        sp = remove_duplicates(sp, sep=" ")
     return sp
 
 def process_text(df=None, col='', source_values=[], clean=True, standardized=True, **kargs): 
@@ -86,7 +94,11 @@ def process_text(df=None, col='', source_values=[], clean=True, standardized=Tru
 
     # for debugging and testing only
     verbose = kargs.get('verbose', 0)
+    remove_dup = kargs.get("remove_dup", False)
+
+    # clean_stop_words = kargs.get('clean_stop_words', True)
     # docType = kargs.get('doc_type', "long name")
+
     value_default = kargs.get("value_default", "")   # default value for NaN/Null
     return_dataframe = False
     # save = kargs.get('save', False)
@@ -108,6 +120,7 @@ def process_text(df=None, col='', source_values=[], clean=True, standardized=Tru
     if standardized: # this has to come before clean operation
         # df[col] = df[col].apply(standardize)
         source_values = [standardize(source_value) for source_value in source_values]
+        # numeric to string + null to empty string + cap
 
     # clean text 
     if clean: 
@@ -122,6 +135,9 @@ def process_text(df=None, col='', source_values=[], clean=True, standardized=Tru
         # remove extra spaces
         # df[col] = df[col].apply(split_and_strip)
         source_values = [split_and_strip(source_value) for source_value in source_values]
+
+    if remove_dup: 
+        source_values = [remove_duplicates(source_value) for source_value in source_values]
 
     if return_dataframe: 
         df[col] = source_values

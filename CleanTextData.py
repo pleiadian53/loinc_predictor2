@@ -142,42 +142,6 @@ def import_source_data(input_path='', verbose=1, warn_bad_lines=False, sep=',', 
 
     return mapped
 
-def update_values(df, dtypes=[], sep='|', cached={}):
-    import pandas as pd
-    from loinc import LoincTSet 
-
-    if len(cached) > 0: 
-        for col, values in cached.items(): 
-            df[col] = values
-        return df
-    
-    # --- otherwise, read the cleaned values from the file
-
-    if not dtypes: dtypes = ['test_order_name', 'test_result_name', 'test_specimen_type', 'test_result_comments', 'medivo_test_result_type', ]
-    for dtype in dtypes: 
-        print("(update_values) Processing dtype: {} ######".format(dtype))
-        fpath = os.path.join(config.out_dir, "cleaned_{}.csv".format(dtype))
-        df_cleaned = pd.read_csv(fpath, sep=sep, header=0, index_col=None, error_bad_lines=True)
-        n_cleaned = df_cleaned.shape[0]
-        cols_cleaned = LoincTSet.get_cols_cleaned(dtype)
-
-        test_cases = np.random.choice( range(df_cleaned.shape[0]), min(n_cleaned, 100))
-        for r, row in df_cleaned.iterrows(): 
-            orig, cleaned = row[cols_cleaned[1]], row[cols_cleaned[2]]
-            if not pd.isna(orig) and len(str(orig)) > 0: 
-                if r in test_cases: 
-                    df_matched = df.loc[df[dtype].apply(standardize) == orig]
-                    assert not df_matched.empty, "Debug: Wrong columns? {} | sample values:\n{}\n... orig: {} | cleaned: {}".format(
-                            cols_cleaned, df.sample(n=min(10, df.shape[0]))[dtype], orig, cleaned)
-                    print("... Found {} matches | orig: {} | cleaned: {}".format(df_matched.shape[0], orig, cleaned))
-                # [todo] some of the text could not find a match, why?
-
-                # df.loc[df[dtype].str.upper().str.strip() == orig, dtype] = cleaned
-                df.loc[df[dtype].apply(standardize) == orig, dtype] = cleaned
-
-                # df.loc[df[dtype] == orig, dtype] = cleaned   # replace with cleaned value
-    return df
-
 def import_source_data0(verbose=1):
     if config.print_status == 'Y':
         print('Importing source data')
@@ -221,8 +185,43 @@ def import_source_data0(verbose=1):
     cleanedSpecimens = clean_terms(specimenList, 'test_specimen_type')
 
     return [cleanedOrders, cleanedResults, cleanedSpecimens]
-    
     # return {'test_result_order': cleanOrders, 'test_result_name': cleanedResults, ''}
+
+def update_values(df, dtypes=[], sep='|', cached={}):
+    import pandas as pd
+    from loinc import LoincTSet 
+
+    if len(cached) > 0: 
+        for col, values in cached.items(): 
+            df[col] = values
+        return df
+    
+    # --- otherwise, read the cleaned values from the file
+
+    if not dtypes: dtypes = ['test_order_name', 'test_result_name', 'test_specimen_type', 'test_result_comments', 'medivo_test_result_type', ]
+    for dtype in dtypes: 
+        print("(update_values) Processing dtype: {} ######".format(dtype))
+        fpath = os.path.join(config.out_dir, "cleaned_{}.csv".format(dtype))
+        df_cleaned = pd.read_csv(fpath, sep=sep, header=0, index_col=None, error_bad_lines=True)
+        n_cleaned = df_cleaned.shape[0]
+        cols_cleaned = LoincTSet.get_cols_cleaned(dtype)
+
+        test_cases = np.random.choice( range(df_cleaned.shape[0]), min(n_cleaned, 100))
+        for r, row in df_cleaned.iterrows(): 
+            orig, cleaned = row[cols_cleaned[1]], row[cols_cleaned[2]]
+            if not pd.isna(orig) and len(str(orig)) > 0: 
+                if r in test_cases: 
+                    df_matched = df.loc[df[dtype].apply(standardize) == orig]
+                    assert not df_matched.empty, "Debug: Wrong columns? {} | sample values:\n{}\n... orig: {} | cleaned: {}".format(
+                            cols_cleaned, df.sample(n=min(10, df.shape[0]))[dtype], orig, cleaned)
+                    print("... Found {} matches | orig: {} | cleaned: {}".format(df_matched.shape[0], orig, cleaned))
+                # [todo] some of the text could not find a match, why?
+
+                # df.loc[df[dtype].str.upper().str.strip() == orig, dtype] = cleaned
+                df.loc[df[dtype].apply(standardize) == orig, dtype] = cleaned
+
+                # df.loc[df[dtype] == orig, dtype] = cleaned   # replace with cleaned value
+    return df
 
 def preprocess_terms(df, dataType='testNames'):
     """

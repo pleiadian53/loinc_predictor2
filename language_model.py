@@ -66,7 +66,7 @@ def build_tfidf_model(source_values=[], df=None, cols=[], **kargs):
     if len(source_values) == 0:
         assert df is not None 
         if not cols: cols = ['test_result_loinc_code', 'medivo_test_result_type']
-        source_values = tr.conjoin(df, cols=cols, transformed_vars_only=True, sep=" ", remove_dup=True)
+        source_values = tr.conjoin(df, cols=cols, transformed_vars_only=True, sep=" ", remove_dup=False)
         # ... remove_dup: if True, remove duplicate tokens in the sentence
         if not tStandardize: 
             print("(build_tfidf_model) Warning: Building corpus from dataframe, you may need to set standardize to True!")

@@ -2,6 +2,7 @@ import re, os, random
 import pandas as pd
 import numpy as np
 import data_processor as dp
+from utils_sys import highlight
 
 class SharedProperties(object): 
     col_unknown = "unknown"
@@ -203,6 +204,10 @@ class LoincTSet(TSet):
         throw = kargs.get('throw', False)
         sep = kargs.get('sep', ',')
 
+        # -- Text processing paramters to facilicate lookup
+        clean_text = kargs.get('clean_text', False)
+        remove_dup = kargs.get('remove_dup', False)
+
         input_dir = kargs.get('input_dir', "data") # os.path.join(os.getcwd(), 'result')
         input_file = kargs.get('input_file', f"{dtype}-sdist-vars.csv")  
         input_path = os.path.join(input_dir, input_file)
@@ -218,6 +223,19 @@ class LoincTSet(TSet):
                 raise ValueError(msg)
             else: 
                 if verbose: print(msg)
+
+        if clean_text: 
+            from functools import partial
+            # from CleanTextData import clean_term
+            from text_processor import process_string
+            # sometimes it may be necessary to clean T-attributes
+            if verbose > 1: 
+                print("(load_sdist_vars) cleaning vars file: {}".format(input_path))
+                print("... (before) df:\n{}\n".format(df.head(10)[dtype]))
+            process_string2 = partial(process_string, doc_type='string', remove_dup=remove_dup)
+            df[dtype] = df[dtype].apply(process_string2)
+            if verbose > 1: 
+                print("... (after) df:\n{}\n".format(df.head(10)[dtype]))
         
         return df
     @staticmethod
@@ -404,7 +422,7 @@ class FeatureSet(object):
         target_cols = FeatureSet.target_cols
 
         # if remove_prefix set to True, then remove the prefix "test_" before comparing withthe dataframe's column
-        matching_vars = [col for col in ts.columns if col.startswith(matching_cols)]
+        # matching_vars = [col for col in ts.columns if col.startswith(matching_cols)]
 
         target_vars = target_cols # all specified target should be present
         assert np.all([col in ts.columns for col in target_cols]), \
@@ -414,11 +432,47 @@ class FeatureSet(object):
         meta_vars = [col for col in FeatureSet.meta_cols if col in ts.columns]
 
         V = cat_cols + cont_cols
-        regular_vars = [col for col in sorted(set(V)-set(matching_vars)-set(target_vars)-set(derived_vars)-set(meta_vars), key=V.index) 
+        Veff = [col for col in ts.columns if col.startswith(tuple(V))]
+        # ... we need Veff because variables after encoding may be suffixed by numbers (e.g. test_result_comments_6)
+
+        regular_vars = [col for col in sorted(set(Veff)-set(target_vars)-set(derived_vars)-set(meta_vars), key=Veff.index) 
                             if col in ts.columns]
         # sorted(set(V)-set(matching_vars)-set(target_vars)-set(derived_vars)-set(meta_vars), key=V.index)
 
-        return (matching_vars, regular_vars, target_vars, derived_vars, meta_vars)
+        return (regular_vars, target_vars, derived_vars, meta_vars)
+
+    @staticmethod
+    def partition(df, verbose=1, mode='prior'):
+        """
+
+        Memo
+        ----
+        1. "df" is the source data (not the transformed data), therefore we need to use 
+                MatchmakerFeatureSet.categorize_features() 
+
+                INSTEAD OF  
+
+                MatchmakerFeatureSet.categorize_transformed_features()
+
+        """
+        from pandas import DataFrame
+
+        regular_vars, target_vars, derived_vars, meta_vars = FeatureSet.categorize_features(df)
+
+        if verbose: 
+            highlight("[partition] {} reg vars | {} label vars".format(len(regular_vars), len(target_vars)))
+            msg = ""
+            msg += "... regular_vars (X): {}\n".format(regular_vars)
+            msg += "... target vars (y):  {}\n".format(target_vars)
+            msg += "... meta vars:        {}\n".format(meta_vars)
+            print(msg)
+
+        dfX = df[regular_vars]
+        dfY = df[target_vars]
+        dfD = df[derived_vars] if len(derived_vars) > 0 else DataFrame()
+        dfZ = df[meta_vars] if len(meta_vars) > 0 else DataFrame()
+
+        return (dfX, dfY, dfD, dfZ)
 
 ### end class FeatureSet
 
@@ -475,6 +529,8 @@ class MatchmakerFeatureSet(FeatureSet):
     # new attributes 
     col_assignment = 'assignment'
     col_target = 'label'  # matching status 
+    col_score = 'score'   # confidence score (probability of being correct); this won't exist until prediction phase (see matchmaker_analyzer)
+
     pos_label = 1
     neg_label = 0
     
@@ -495,8 +551,18 @@ class MatchmakerFeatureSet(FeatureSet):
 
     # after the feature transformation, what was originally matching_cols are now just meta data (not part of the active trainining variables)
     meta_cols = [col_assignment, ] + matching_cols + descriptors
+    # ... these variables are excluded from predictive analytics (only used for error analysis and diagnosis)
+
+    result_cols = [col_score, ] # additional attributes added to the test data 
+    # ... these attributes are to be dropped everytime when a new model is trained and new predictions are made
 
     high_card_cols = list(set(cat_cols)-set(FeatureSet.low_card_cols)-set(matching_cols))
+
+    @staticmethod
+    def customize_meta_cols(cols, descriptors):
+        assert np.all([col in MatchmakerFeatureSet.matching_cols for col in cols]), "Invalid T-attributes: {}".format(cols)
+        assert np.all([dpt in MatchmakerFeatureSet.descriptors for dpt in descriptors]), "Invalide LOINC descriptors: {}".format(descriptors)
+        return [MatchmakerFeatureSet.col_assignment, ] + cols + descriptors
 
     @staticmethod
     def categorize_features(ts, remove_prefix=True): 
@@ -567,10 +633,73 @@ class MatchmakerFeatureSet(FeatureSet):
         derived_vars = [col for col in MatchmakerFeatureSet.derived_cols if col in ts.columns]
         meta_vars = [col for col in MatchmakerFeatureSet.meta_cols if col in ts.columns]
 
+        # untracked, to be updated each time when a new model is trained
+        result_vars = [col for col in MatchmakerFeatureSet.result_cols if col in ts.columns]
+
         V = list(ts.columns)
-        regular_vars = sorted(set(V)-set(matching_vars)-set(target_vars)-set(derived_vars)-set(meta_vars), key=V.index)
+        regular_vars = sorted(set(V)-set(matching_vars)-set(target_vars)-set(derived_vars)-set(meta_vars)-set(result_vars), key=V.index)
 
         return (matching_vars, regular_vars, target_vars, derived_vars, meta_vars)
+
+    @staticmethod
+    def drop_untracked(ts, verbose=1):
+        untracked_cols = MatchmakerFeatureSet.result_cols  # + [ ... ]
+        untracked_vars = [col for col in untracked_cols if col in ts.columns]
+
+        Nu = len(untracked_vars)
+        if Nu > 0: 
+            if verbose: print("[drop] Found n={} untracked vars to be dropped:\n{}\n".format(Nu, untracked_vars))
+            return ts.drop(untracked_vars, axis=1)
+
+        if verbose: print("[drop] No untracked vars found.")
+        return ts
+
+    @staticmethod
+    def partition(df, verbose=1, mode='prior'):
+        """
+
+        Memo
+        ----
+        1. "df" is the source data (not the transformed data), therefore we need to use 
+                MatchmakerFeatureSet.categorize_features() 
+
+                INSTEAD OF  
+
+                MatchmakerFeatureSet.categorize_transformed_features()
+
+        """
+        from pandas import DataFrame
+
+        matching_cols = MatchmakerFeatureSet.matching_cols
+
+        # choose categorizer 
+        isTransformed = False
+        if mode.startswith(("pri", "bef")): # before transformation
+            categorizer = MatchmakerFeatureSet.categorize_features
+        else: 
+            categorizer = MatchmakerFeatureSet.categorize_transformed_features
+            isTransformed = True
+
+        matching_vars, regular_vars, target_vars, derived_vars, meta_vars = categorizer(df, remove_prefix=False)
+        if not isTransformed: assert len(matching_vars) <= len(matching_cols)
+
+        if verbose: 
+            highlight("[partition] {} matching vars | {} reg vars | {} label vars".format(len(matching_vars), 
+                len(regular_vars), len(target_vars)))
+            msg = ""
+            msg += "... matching_vars: {}\n".format(matching_vars)
+            msg += "... regular_vars:  {}\n".format(regular_vars)
+            msg += "... target vars:   {}\n".format(target_vars)
+            msg += "... meta vars:     {}\n".format(meta_vars)
+            print(msg)
+
+        dfM = df[matching_vars]
+        dfX = df[regular_vars]
+        dfY = df[target_vars]
+        dfD = df[derived_vars] if len(derived_vars) > 0 else DataFrame()
+        dfZ = df[meta_vars] if len(meta_vars) > 0 else DataFrame()
+
+        return (dfM, dfX, dfY, dfD, dfZ)
 
 ### End class MatchmakerFeatureSet
 

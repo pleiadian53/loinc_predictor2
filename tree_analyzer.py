@@ -133,14 +133,15 @@ def analyze_path(X, y, model=None, p_grid={}, best_params={}, feature_set=[], n_
     measures = ['accuracy', 'auc', 'fmax', 'p_threshold']
     scores = {m:[] for m in measures}
     test_points = np.random.choice(range(n_trials), 1)
+
     # prob_thresholds = []
     for i in range(n_trials): 
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=i) # 70% training and 30% test
         print("[{}] dim(X_test): {}".format(i, X_test.shape))
 
-        # [test]
-        print("[test] Feature value range ...")
-        det_range2(X_train, y_train, fset=feature_set, pos_label=1)
+        # [test] feature value range
+        # print("[test] Feature value range ...")
+        # det_range2(X_train, y_train, fset=feature_set, pos_label=1)
 
         # model = model.set_params(**best_params).fit(X_train, y_train)
         model = apply_model(X_train, y_train, model=model, params=best_params) 
@@ -202,7 +203,7 @@ def analyze_path(X, y, model=None, p_grid={}, best_params={}, feature_set=[], n_
 
     return paths, counts
 
-def load_data(input_file, **kargs): 
+def load_data(cohort, **kargs): 
     """
 
     Memo
@@ -215,21 +216,10 @@ def load_data(input_file, **kargs):
             exposures-4yrs-merged.csv
 
     """
-    import collections
-    import data_processor as dproc
+    import data_processor as dp
+    return dp.load_data(cohort, **kargs)
 
-    X, y, features = dproc.load_data(input_path=dataDir, input_file=input_file, sep=',') # other params: input_path/None
-
-    print("(load_data) dim(X): {}, sample_size: {}".format(X.shape, X.shape[0]))
-
-    counts = collections.Counter(y)
-    print("... class distribution | classes: {} | sizes: {}".format(list(counts.keys()), counts))
-    print("... variables: {}".format(features))
-
-    return X, y, features
-
-
-def runWorkflow2(X, y, features, model=None, param_grid={}, **kargs):
+def runWorkflow(X, y, features, model=None, param_grid={}, **kargs):
     # 2. define model (e.g. decision tree)
     if verbose: print("(runWorkflow) 2. Define model (e.g. decision tree and its parameters) ...")
     ######################################################
@@ -273,90 +263,13 @@ def runWorkflow2(X, y, features, model=None, param_grid={}, **kargs):
         # for k, ths in counts.items(): 
         #     assert isinstance(ths, list), "{} -> {}".format(k, ths)
     if counts: 
-        msg = "(runWorkflow2) Count feature usage (applicable for tree-based methods e.g. decision tree) ...\n"
+        msg = "(runWorkflow) Count feature usage (applicable for tree-based methods e.g. decision tree) ...\n"
         fcounts = [(k, len(ths)) for k, ths in counts.items()]
         sorted_features = sorted(fcounts, key=lambda x: x[1], reverse=True)
         msg += "> Top {} features:\n{}\n".format(topk_vars, sorted_features[:topk_vars])
         print(msg)
 
     return model
-
-def runWorkflow(**kargs):
-    def summarize_paths(paths, topk=10):
-        labels = np.unique(list(paths.keys()))
-    
-        print("\n> 1. Frequent decision paths by labels (n={})".format(len(labels)))
-        sorted_paths = sort_path(paths, labels=labels, merge_labels=False, verbose=True)
-        for label in labels: 
-            print("... Top {} paths (@label={}):\n{}\n".format(topk, label, sorted_paths[label][:topk]))
-            
-        print("> 2. Frequent decision paths overall ...")
-        sorted_paths = sort_path(paths, labels=labels, merge_labels=True, verbose=True)
-        print("> Top {} paths (overall):\n{}\n".format(topk, sorted_paths[:topk]))
-
-        return
-    def summarize_vars(X, y): 
-        counts = collections.Counter(y)
-        print("... class distribution | classes: {} | sizes: {}".format(list(counts.keys()), counts))
-
-    from data_processor import load_data
-    from utils_tree import visualize, sort_path
-    import operator
-    
-    verbose = kargs.get('verbose', True)
-
-    # 1. define input dataset 
-    if verbose: print("(runWorkflow) 1. Specifying input data ...")
-    ######################################################
-    input_file = 'exposures-4yrs-merged-imputed.csv'
-    file_prefix = input_file.split('.')[0]
-    ######################################################
-
-    X, y, features = load_data(input_path=dataDir, input_file=input_file, exclude_vars=['Gender', 'Zip Code'], verbose=True)
-
-    # 2. define model (e.g. decision tree)
-    if verbose: print("(runWorkflow) 2. Define model (e.g. decision tree and its parameters) ...")
-    ######################################################
-    p_grid = {"max_depth": [3, 4, 5, 8, 10, 15], 
-              "min_samples_leaf": [1, 5, 10, 15, 20]}
-    ######################################################
-    # ... min_samples_leaf: the minimum number of samples required to be at a leaf node. 
-    #     A split point at any depth will only be considered if it leaves at least 
-    #     min_samples_leaf training samples in each of the left and right branches
-
-    model = DecisionTreeClassifier(criterion='entropy', random_state=1)
-
-    # 3. visualize the tree (deferred to analyze_path())
-    ###################################################### 
-    test_size = 0.3
-    rs = 53
-    topk = 10
-    topk_vars = 10
-    ######################################################
-    labels = [str(l) for l in sorted(np.unique(y))]
-
-    # X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=rs) # 70% training and 30% test
-
-    # params = {'max_depth': 5}  # use model selection to determine the optimal 'max_depth'
-    # model = classify(X_train, y_train, params=params, random_state=rs)
-    # graph = visualize(model, features, labels=labels, plot_dir=plotDir, file_name=file_prefix, ext='tif')
-
-    # 4. analyze decision paths and keep track of frequent features
-    paths, counts = \
-        analyze_path(X, y, model=model, p_grid=p_grid, feature_set=features, n_trials=100, n_trials_ms=30, save=False,  
-                        merge_labels=False, policy_count='standard', experiment_id=file_prefix,
-                           create_dir=True, index=0, validate_tree=False, to_str=True, verbose=False)
-
-    summarize_paths(paths, topk=topk)
-
-    # for k, ths in counts.items(): 
-    #     assert isinstance(ths, list), "{} -> {}".format(k, ths)
-    fcounts = [(k, len(ths)) for k, ths in counts.items()]
-    sorted_features = sorted(fcounts, key=lambda x: x[1], reverse=True)
-    print("> Top {} features:\n{}\n".format(topk_vars, sorted_features[:topk_vars]))
-    
-
-    return
 
 if __name__ == "__main__":
     runWorkflow()

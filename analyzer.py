@@ -10,13 +10,14 @@ from sklearn import metrics #Import scikit-learn metrics module for accuracy cal
 
 from tabulate import tabulate
 import common
+import config
 import data_processor as dproc
 
 from utils_sys import highlight
 from utils_plot import saveFig # contains "matplotlib.use('Agg')" which needs to be called before pyplot 
 from matplotlib import pyplot as plt
 
-from loinc import LoincTable, LoincTSet
+from loinc import LoincTable, LoincTSet, FeatureSet
 from loinc_mtrt import LoincMTRT
 from loinc import load_loinc_table
 from loinc_mtrt import load_loinc_to_mtrt
@@ -201,6 +202,94 @@ def show_dict(adict, topn=-1, by='', header=[], n_samples=-1, ascending=False, p
 # Classifier Utilties
 #######################################################
 
+def transform_and_encode(df, fill_missing=True, token_default='unknown', 
+        drop_high_missing=False, pth_null=0.9, verbose=1):
+    """
+    Transform the non-matching variables (i.e. all variables NOT used to match
+    with the LOINC decriptions such as meta_sender_name, test_order_code, test_result_code). 
+
+    Matching variables are the T-attributes that carry text values (e.g. test_order_name, test_result_name)
+    Non-matching variables are typically not text-valued columns
+
+    Input
+    -----
+    df: source training data 
+
+    """
+    from transformer import encode_vars 
+
+    # matchmaker features 
+    cat_cols = FeatureSet.cat_cols
+    cont_cols = FeatureSet.cont_cols
+    target_cols = FeatureSet.target_cols
+    high_card_cols = FeatureSet.high_card_cols
+
+    # --- transform variables
+    FeatureSet.to_age(df)
+    values = col_values(df, col='age', n=10)
+    print("[transform] age: {}".format(values))
+
+    # -- Categorize variables
+    regular_vars, target_vars, derived_vars, meta_vars = FeatureSet.categorize_features(df)
+    # ...note 
+    #    regular_vars: non-matching columns (e.g. meta_sender_name, test_order_code, test_result_code, ...)
+
+    # V = cont_cols + cat_cols  # + derived_cols (e.g. count)
+    # L = target_cols
+    dfX = df[regular_vars]
+    dfY = df[target_vars]
+
+    # optinal variables
+    dfD = df[derived_vars] if len(derived_vars) > 0 else DataFrame()
+    dfZ = df[meta_vars] if len(meta_vars) > 0 else DataFrame()
+
+    if fill_missing:  
+        # dfM.fillna(value=token_default, inplace=True)
+        # ... don't fill missing values for dfM here!
+        dfX[cont_cols].fillna(value=0, inplace=True)
+        dfX[cat_cols].fillna(value=token_default, inplace=True)
+
+        dfY.fillna(value=token_default, inplace=True)
+
+    if drop_high_missing: 
+        # drop columns/vars with too many missing values 
+        N = dfX.shape[0]
+        n_thresh = int(N * pth_null)
+        nf0 = nf = dfX.shape[1]
+        fset0 = set(dfX.columns.values)
+
+        dfX = dfX[dfX.columns[dfX.isnull().mean() < pth_null]]
+        fset = set(dfX.columns.values)
+        nf = dfX.shape[1]
+        print("[transform] Dropped n={} features:\n{}\n".format(nf-nf0, fset0-fset))
+
+    dim0 = dfX.shape
+    dfX, encoder = encode_vars(dfX, fset=cat_cols, high_card_cols=high_card_cols)
+    if verbose: 
+        print("[encode] dim(dfX-): {}, dim(dfX+): {}".format(dim0, dfX.shape))
+        # [log] ... [encode] dim(dfX-): (64979, 13), dim(dfX+): (64979, 97)
+
+    return (dfX, dfY, dfD, dfZ, encoder)
+
+def feature_transform(df, **kargs):
+    # from loinc import LoincTSet
+    tDropHighMissing = kargs.get('drop_high_missing', False)
+    pth_null = kargs.get("pth_null", 0.9)  # threshold of null-value proportion to declare a "high missing rate"
+    verbose = kargs.get('verbose', 1)
+    token_default = kargs.get("token_default", LoincTSet.token_default)
+
+    N0, Nv0 = df.shape
+    dfX, dfY, dfD, dfZ, encoder = \
+         transform_and_encode(df, fill_missing=True, token_default=token_default, 
+                drop_high_missing=tDropHighMissing, pth_null=pth_null)
+    # ... transform and encode only deals with X i.e. regular variables (i.e. non-matching variables)
+    
+    df = pd.concat([dfX, dfY, dfD, dfZ], axis=1) # matching, regular, target, derived, meta  
+    
+    assert df.shape[0] == N0
+    if verbose: highlight("[transform] dim of vars: {} -> {}".format(Nv0, df.shape[1]))
+    return df
+
 def run_model_selection(X, y, model, p_grid={}, n_runs=30, scoring='roc_auc', output_path='', output_file='', **kargs): 
     from sklearn.model_selection import GridSearchCV, cross_val_score, KFold
     
@@ -326,6 +415,9 @@ def eval_performance(X, y, model=None, cv=5, random_state=53, **kargs):
 
     kf = StratifiedKFold(n_splits=cv, shuffle=True, random_state=random_state)
 
+    if len(y.shape) == 1: 
+        y = y.reshape((y.shape[0], 1))
+
     cv_scores =[]
     for i, (train, test) in enumerate(kf.split(X,y)):
         if verbose: print('> {} of KFold {}'.format(i, kf.n_splits))
@@ -384,32 +476,8 @@ def load_data_incr(cohort='', input_file='', sep=',', **kargs):
         else: 
             yield dfi
 
-def load_src_data(cohort='hepatitis-c', **kargs): 
-    isProcessed = kargs.get('processed', True)
-    canonicalized = kargs.get('canonicalized', True)
-
-    input_dir = kargs.get('input_dir', os.path.join(os.getcwd(), 'data')) 
-
-    if isProcessed: 
-        input_file = f"andromeda-pond-{cohort}-processed.csv" # "andromeda_pond-10p.csv" 
-    else:
-        input_file = f"andromeda-pond-{cohort}.csv" # "andromeda_pond-10p.csv"
-    input_path = os.path.join(input_dir, input_file)
-
-    warn_bad_lines = kargs.get('warn_bad_lines', True)
-    columns = kargs.get('columns', [])
-    df = pd.read_csv(input_path, sep=',', header=0, index_col=None, error_bad_lines=False, warn_bad_lines=warn_bad_lines)
-
-    if canonicalized: 
-        import loinc as lc
-        col_target = kargs.get('col_target', 'test_result_loinc_code')
-        token_default = token_missing = 'unknown'
-        df = df.drop_duplicates(keep='last')  # drop duplicates 
-        df = lc.canonicalize(df, col_target=col_target, token_missing=token_default) # noisy_values/[]
-
-    if len(columns) > 0: 
-        return df[columns]
-    return df
+def load_src_data(**kargs): 
+    return dproc.load_src_data(**kargs)
 
 def load_performance(input_dir='result', input_file='', **kargs):
     cohort = kargs.get('cohort', 'hepatitis-c')
@@ -425,19 +493,19 @@ def load_performance(input_dir='result', input_file='', **kargs):
 
     return df
     
-def save_performnace(df, output_dir='result', output_file='', **kargs): 
+def save_performance(df, output_dir='result', output_file='', **kargs): 
     cohort = kargs.get('cohort', 'hepatitis-c')
     sep = kargs.get('sep', '|')
     verbose = kargs.get('verbose', 1)
 
     output_dir = kargs.get('output_dir', os.path.join(os.getcwd(), output_dir)) 
-    output_file = f"performance-{cohort}.csv" 
+    if not output_file: output_file = f"performance-{cohort}.csv" 
     output_path = os.path.join(output_dir, output_file)
     df.to_csv(output_path, sep=sep, index=False, header=True)
 
     if verbose: 
         print('(save) Saving performance dataframe to:\n{}\n ... #'.format(output_path))
-        for code, score in zip(df_perf['code'], df_perf['mean']):
+        for code, score in zip(df['code'], df['mean']):
             print(f"[{code}] -> {score}")
     return
 
@@ -685,25 +753,6 @@ def det_cardinality(df, **kargs):
                     adict[col] = len(np.unique(values))
     return adict
 
-def one_vs_all_encoding(df, target_label, codebook={'pos': 1, 'neg': 0}, col='test_result_loinc_code', col_target='target'): 
-    # inplace operation
-    
-    if isinstance(df, DataFrame): 
-        assert col in df.columns 
-        cond_pos = df[col] == target_label  # target loinc
-        cond_neg = df[col] != target_label
-        print("> target: {} (dtype: {}) | n(pos): {}, n(neg): {}".format(target, type(target), np.sum(cond_pos), np.sum(cond_neg)))
-        df[col_target] = df[col]
-        df.loc[cond_pos, col_target] = codebook['pos']
-        df.loc[cond_neg, col_target] = codebook['neg'] 
-    else: 
-        # df is a numpy 1D array
-        # print("> y: {}, target_label: {}".format(df, target_label))
-        # print("> y': {}".format(np.where(df == target_label, codebook['pos'], codebook['neg'])))
-        df = np.where(df == target_label, codebook['pos'], codebook['neg'])
-
-    return df
-
 def get_eff_values(df, col=''):
     if isinstance(df, DataFrame):
         assert col in df.columns
@@ -730,6 +779,8 @@ def get_sample_sizes(y, sorted_=True, col='test_result_loinc_code'):
         #    sizes = collections.OrderedDict( sorted(sizes.items(), key=operator.itemgetter(1), reverse=True) )
     else: 
         # df is a numpy array or list
+        if len(y.shape) == 2: 
+            y = y.reshape( (y.shape[0],) )
         sizes = collections.Counter(y)
         
     return sizes # label/col -> sample size
@@ -741,6 +792,25 @@ def summarize_dict(d, topn=15, sort_=True):
     for k, v in d[:topn]: 
         print(f"[{k}] -> {v}")
     return
+
+def one_vs_all_encoding(df, target_label, codebook={'pos': 1, 'neg': 0}, col='test_result_loinc_code', col_target='target'): 
+    # inplace operation
+    
+    if isinstance(df, DataFrame): 
+        assert col in df.columns 
+        cond_pos = df[col] == target_label  # target loinc
+        cond_neg = df[col] != target_label
+        print("> target: {} (dtype: {}) | n(pos): {}, n(neg): {}".format(target, type(target), np.sum(cond_pos), np.sum(cond_neg)))
+        df[col_target] = df[col]
+        df.loc[cond_pos, col_target] = codebook['pos']
+        df.loc[cond_neg, col_target] = codebook['neg'] 
+    else: 
+        # df is a numpy 1D array
+        # print("> y: {}, target_label: {}".format(df, target_label))
+        # print("> y': {}".format(np.where(df == target_label, codebook['pos'], codebook['neg'])))
+        df = np.where(df == target_label, codebook['pos'], codebook['neg'])
+
+    return df
 
 def encode_labels(df, pos_label, neg_label=None, col_label='test_result_loinc_code', codebook={}, verbose=1): 
     if not codebook: codebook = {'pos': 1, 'neg': 0, '+': 1, '-': 0}
@@ -845,12 +915,13 @@ def balance_by_downsampling(X, y, method='median', majority_max=3):
     """
     import pandas as pd
     import collections
+    from sklearn.utils import resample
     
     nf = X.shape[1]
     labels = np.unique(y)
-    label_id = nf+1
+    label_dim = nf # the index for the label  
     lcnt = collections.Counter(y) # label counts
-    print("balance_by_downsampling) nl: {}, labels: {} | nf={}".format(len(labels), labels, nf))
+    print("(balance_by_downsampling) dim(X): {}, nl: {}, labels: {} | nf={}".format(X.shape, len(labels), labels, nf))
 
     lastn = 1
     Nmin = lcnt.most_common()[:-lastn-1:-1][0][1]
@@ -869,26 +940,27 @@ def balance_by_downsampling(X, y, method='median', majority_max=3):
     ts = DataFrame(X)
     if method.startswith('med'): # median
         Ncut = int(np.median([c for l, c in lcnt.items()]))
-
     elif method.startswith('multi'):  # multiple
         Ncut = Nmin * majority_max
 
     ###########
     tx = []
     for label in labels: 
-        tsl = ts[ts[label_id]==label]
+        tsl = ts[ts[label_dim]==label]
         if tsl.shape[0] > Ncut:
             tx.append(tsl.sample(n=Ncut))
         else: 
-            if not tsl.empty: 
-                tx.append(tsl) 
+            #if not tsl.empty: 
+            tx.append(tsl) 
 
     if len(tx) > 0: 
         ts = pd.concat(tx, ignore_index=True) 
 
+    # print("[balance] dim(ts): {} | nf-1: {}, label_dim: {}".format(ts.shape, nf-1, label_dim))
+
     # separate ts into (X, y)
-    X = ts.iloc[:,:nf]
-    y = ts.iloc[label_id]
+    X = ts.iloc[:,:nf].values
+    y = ts.iloc[:,nf].values
 
     return (X, y)
 
@@ -1040,7 +1112,6 @@ def compare_test_with_6parts(codes=[], df=None, df_loinc=None,
     cohort = kargs.get('cohort', "hepatitis-c")
     processed = kargs.get('processed', True)
     if df is None: 
-        # df = load_data(input_file=f'andromeda-pond-{cohort}.csv', warn_bad_lines=False, canonicalized=True)
         df = load_src_data(cohort=cohort, warn_bad_lines=False, canonicalized=True, processed=processed)
 
     if df_loinc is None: df_loinc = load_loinc_table(dehyphenate=True)
@@ -1166,7 +1237,6 @@ def analyze_data_set(**kargs):
     col_tag = 'medivo_test_result_type'
     token_default = 'unknown'
 
-    # df = load_data(input_file='andromeda-pond-hepatitis-c-processed.csv', warn_bad_lines=False, canonicalized=True)
     df = load_src_data(cohort=cohort, warn_bad_lines=False, canonicalized=True, processed=True)
     N0 = df.shape[0]
     # ... if canonicalized <- True => call canonicalize(): fill n/a + dehyphenate + replace_values + trim_tail + fill others (non-target classes)
@@ -1363,14 +1433,6 @@ def analyze_missing_cases(df, **kargs):
 ########################################################################
 # --- Example Usage and Test Cases --- #
 
-def demo_io(**kargs):
-
-    cohort = 'hepatitis-c'
-    # MTRT dataframe / training data
-    df = load_data(cohort=cohort, verbose=1)  # the original training data with relevant MTRT attributes
-
-    return
-
 def demo_performance(**kargs): 
     from sklearn.datasets import load_iris
 
@@ -1408,6 +1470,7 @@ def demo_stratify(**kargs):
     col_target = 'test_result_loinc_code'
     tBigData = True
     tSave = True
+    tProcessed = False
 
     df_perf = load_performance(input_dir='result', cohort=cohort)
 
@@ -1418,13 +1481,11 @@ def demo_stratify(**kargs):
     # load training data 
     # cohort = 'loinc-hepatitis-c'
 
-    # ts0 = load_data(cohort=cohort)  
-    # ... this loads curated dataset 
-
     # load source data
-    ts0 = load_data(input_file='andromeda-pond-hepatitis-c.csv', warn_bad_lines=False)
-    ts0 = ts0.drop_duplicates(keep='last')  # drop duplicates 
-    ts0 = lc.canonicalize(ts0, col_target=col_target, token_missing=token_default)
+    # ts0 = load_data(input_file='andromeda-pond-hepatitis-c.csv', warn_bad_lines=False)
+    ts0 = load_src_data(cohort=cohort, warn_bad_lines=False, canonicalized=True, processed=tProcessed)
+    # ts0 = ts0.drop_duplicates(keep='last')  # drop duplicates 
+    # ts0 = lc.canonicalize(ts0, col_target=col_target, token_missing=token_default)
     N0 = ts0.shape[0]
 
     print("(t_stratify) dim(ts0): {}".format(ts0.shape))  
@@ -1433,9 +1494,9 @@ def demo_stratify(**kargs):
     print("(t_stratify) example codes (source):\n{}\n".format(list(codes0_subset)))
 
     # load source data
-    ts_ctrl = load_data(input_file='andromeda_pond-10p.csv', warn_bad_lines=False)
-    ts_ctrl = ts_ctrl.drop_duplicates(keep='last')  # drop duplicates
-    ts_ctrl = lc.canonicalize(ts_ctrl, col_target=col_target, token_missing=token_default, target_labels=loinc_set)
+    ts_ctrl = load_src_data(input_file='andromeda_pond-10p.csv', warn_bad_lines=False)
+    # ts_ctrl = ts_ctrl.drop_duplicates(keep='last')  # drop duplicates
+    # ts_ctrl = lc.canonicalize(ts_ctrl, col_target=col_target, token_missing=token_default, target_labels=loinc_set)
     print("> dim(ts_ctrl): {}".format(ts_ctrl.shape))  
 
     Nctrl = ts_ctrl.shape[0]
@@ -1525,7 +1586,7 @@ def demo_stratify(**kargs):
 def demo_loinc(**kargs):
     from transformer import dehyphenate, trim_tail, replace_values
 
-    df = load_src_data(cohort='hepatitis-c') 
+    df = load_src_data(canonicalized=False, processed=False)   # cohort='hepatitis-c'cohort='hepatitis-c'
 
     print("> Source df dim: {}".format(df.shape))
 
@@ -1582,8 +1643,6 @@ def test(**kargs):
     verbose = 1
 
     for subject in subjects: 
-        ### I/O operations
-        # demo_io(**kargs)
 
         ### Analyze training data 
         if subject.startswith(('d', 'ts')): 

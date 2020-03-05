@@ -7,6 +7,8 @@ import pandas as pd
 from tabulate import tabulate
 import numpy as np
 
+import config
+
 dataDir = os.path.join(os.getcwd(), 'data')  # default unless specified otherwise
 
 class Data(object): 
@@ -14,18 +16,19 @@ class Data(object):
     features = []
     prefix = os.path.join(os.getcwd(), 'data')
 
-def save_generic(df, cohort='', dtype='ts', output_file='', sep=',', **kargs):
+def save_generic(df, cohort='', dtype='?', output_file='', sep=',', **kargs):
     output_dir = kargs.get('output_dir', os.path.join(os.getcwd(), 'data')) 
     verbose=kargs.get('verbose', 1)
     if not output_file: 
         if cohort: 
+            if dtype == '?': dtype = 'test'
             output_file = f"{dtype}-{cohort}.csv" 
         else: 
             output_file = "test.csv"
     output_path = os.path.join(output_dir, output_file)
 
     df.to_csv(output_path, sep=sep, index=False, header=True)
-    if verbose: print("(save_generic) Saved dataframe (dim={}) to:\n{}\n".format(df.shape, output_path))
+    if verbose: print("(save_generic) Saved dataframe (dim={}, dtype={}) to:\n{}\n".format(df.shape, dtype, output_path))
     return  
 def load_generic(cohort='', dtype='ts', input_file='', sep=',', **kargs):
     input_dir = kargs.get('input_dir', os.path.join(os.getcwd(), 'data'))
@@ -94,6 +97,81 @@ def load_data(cohort='', input_file='', sep=',', **kargs):
     if len(columns) > 0: 
         return df[columns]
 
+    return df
+
+def load_data(**kargs): 
+    import collections
+
+    exclude_vars = kargs.pop('exclude_vars', [])
+    col_target = kargs.pop('col_target', config.loinc_col) # usually, this is "test_result_loinc_name"
+    
+    df = load_src_data(**kargs)
+    
+    exclude_vars = list(filter(lambda x: x in df.columns, exclude_vars))
+    exclude_vars.append(col_target)
+    dfX = df.drop(exclude_vars, axis=1)
+    features = dfX.columns.values
+    
+    X = dfX.values
+    y = df[col_target].values
+
+    if verbose: 
+        counts = collections.Counter(y)
+        print("[load] Class distribution | classes: {} | sizes: {}".format(list(counts.keys()), counts))
+        print("...    dim(X): {} variables: {}".format(X.shape, features))
+    
+    return (X, y, features)
+
+def load_src_data(**kargs): 
+    cohort = kargs.get('cohort', "")
+    isProcessed = kargs.get('processed', True)
+    canonicalized = kargs.get('canonicalized', True)
+    verbose = kargs.get("verbose", 1)
+
+    input_dir = kargs.get('input_dir', config.data_dir) 
+    input_file = kargs.get("input_file", "")
+
+    default_input_file = config.in_file if not cohort else f"andromeda-pond-{cohort}.csv"
+    # ... unprocessed input file taken from Andromeda or other data sources
+    default_processed_file = config.processed_file if not cohort else f"andromeda-pond-{cohort}-processed.csv"
+
+    if not input_file: 
+        if isProcessed: 
+            input_file = default_input_file
+            # ... e.g. f"andromeda-pond-{cohort}-processed.csv"  
+            # if this file does not exist yet, then we need to generate it via CleanTextData.import_source_data()
+        else:
+            input_file = default_processed_file
+            # ... e.g. f"andromeda-pond-{cohort}.csv" 
+    input_path = os.path.join(input_dir, input_file)
+
+    if not os.path.exists(input_path): # wanted to load the processed (cleaned) data but it does not exit yet ... 
+        default_input_path = os.path.join(input_dir, default_input_file)
+        # assert os.path.exists(default_input_path), "The raw input file (see config.in_file) must be present: {}".format(default_input_file)
+        if isProcessed: 
+            import CleanTextData as ctd 
+            ctd.import_source_data(input_path=default_input_path)
+            highlight("(load_src_data) Generated processed data at:\n{}\n".format(config.processed_file))
+            input_path = config.processed_file
+            assert os.path.exists(input_path)
+        else: 
+            msg = "The raw input file (see config.in_file) must be present: {}".format(default_input_file)
+            raise ValueError(msg)
+
+    warn_bad_lines = kargs.get('warn_bad_lines', True)
+    columns = kargs.get('columns', [])
+    if verbose: print("[load] Loading default input data: {}".format(input_file))
+    df = pd.read_csv(input_path, sep=',', header=0, index_col=None, error_bad_lines=False, warn_bad_lines=warn_bad_lines)
+
+    if canonicalized: 
+        import loinc as lc
+        col_target = kargs.get('col_target', 'test_result_loinc_code')
+        token_default = token_missing = 'unknown'
+        df = df.drop_duplicates(keep='last')  # drop duplicates 
+        df = lc.canonicalize(df, col_target=col_target, token_missing=token_default) # noisy_values/[]
+
+    if len(columns) > 0: 
+        return df[columns]
     return df
 
 def generate_data(case='classification', sparse=False):
@@ -372,9 +450,8 @@ def down_sample(df, col_label='label', n_samples=-1):
     Related
     -------
     analyzer.balance_by_downsampling()
-    
-    """
 
+    """
     labelCounts = dict(df[col_label].value_counts())
     labelSorted = sorted(labelCounts, key=labelCounts.__getitem__, reverse=True)
     max_label, min_label = labelSorted[0], labelSorted[-1]
