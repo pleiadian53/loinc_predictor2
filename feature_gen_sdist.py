@@ -1205,9 +1205,9 @@ def make_string_distance_features(df=None, dataType='test_order_name', loincmap=
         return df_transformed
 
     # otherwise, return the input data (all but the dataType column) plus the attributes derived from the dataType column (e.g. test_result_name)
-    print("... before the merge dim(df): {}".format(df.shape))
+    # print("... before the merge dim(df): {}".format(df.shape))
     df = pd.merge(df, df_transformed, on=dataType)
-    print("... after  the merge dim(df): {}".format(df.shape))
+    # print("... after  the merge dim(df): {}".format(df.shape))
 
     if drop_datatype_col: 
         if verbose: print("(make_string_distance_features) Drop {}, keeping only derived attributes".format(dataType))
@@ -1250,6 +1250,7 @@ def compute_similarity_with_loinc(row, code, target_cols=[], loinc_lookup={}, va
     value_default = kargs.get('value_default', 0.0)
     
     verify = kargs.get("verify", False)
+    verbose = kargs.get("verbose", 1)
     class_label = kargs.get("label", '?') # is the input 'code' a positive or negative candidate? 
 
     # algorithm parameters 
@@ -1264,7 +1265,9 @@ def compute_similarity_with_loinc(row, code, target_cols=[], loinc_lookup={}, va
         assert np.all([col in row.index for col in target_cols])
 
     if not loinc_lookup: loinc_lookup = lmt.get_loinc_descriptors(dehyphenate=dehyphen, remove_dup=remove_dup_tokens, verify=True)
-    if not vars_lookup: vars_lookup = LoincTSet.load_sdist_var_descriptors(target_cols)
+    if not vars_lookup: 
+        vars_lookup = LoincTSet.load_sdist_var_descriptors(target_cols)
+        # ... by default, process_string is invoked on the T-attributes
 
     # --- Matching rules 
     #     * compare {test_order_name, test_result_name} with SH, LN, Component
@@ -1279,6 +1282,7 @@ def compute_similarity_with_loinc(row, code, target_cols=[], loinc_lookup={}, va
 
     scores = []
     attributes = [] 
+    multimatches = {}  # [test]
     named_scores = defaultdict(dict)
 
     n_exp = 0
@@ -1296,24 +1300,40 @@ def compute_similarity_with_loinc(row, code, target_cols=[], loinc_lookup={}, va
 
         # query vs document (parts of docs)
         # use preprocess_text_simple for now (source_values=source_values, value_default="")
-        t_text = process_string(t_text, doc_type='query')
+        t_text = process_string(t_text, doc_type='query', remove_dup=True)  # raw text -> cleaned text 
         d_text = process_string(d_text, doc_type='doc')
 
         dfv = vars_lookup[query]  # col
+        # ... assumed to be cleaned, and duplicate tokens removed
+
         dfv.fillna("", inplace=True)
         dfvi = dfv.loc[dfv[query] == t_text]
 
-        # [test]
+        # [test][todo]
         #################################################
         if dfvi.shape[0] != 1: 
+            # note: process_string() will remove stop words; however 
+            #       {T-attribute}-sdist-vars.csv keeps only the raw text
+            # rules: 
+            #       choose the one most specific
+
             msg = "Found n={} rows matching {}=\"{}\" ...\n".format(dfvi.shape[0], query, t_text)
-            print("... partially matched: ") 
-            p_matched = [row[query] for r, row in dfv.iterrows() 
-                            if has_common_tokens(s1=row[query], s2=t_text) and has_common_prefix(s1=row[query], s2=t_text)]
+            msg += "... partially matched:\n"
+
+            p_matched = [row_v[query] for r, row_v in dfv.iterrows() 
+                            if has_common_tokens(s1=row_v[query], s2=t_text) and has_common_prefix(s1=row_v[query], s2=t_text)]
             # for i, t_matched in enumerate( dfv.loc[dfv[query].apply( partial(has_common_tokens, s2=t_text))] ): 
             for i, pm in enumerate(p_matched): 
-                print(f"   + [{i}] {pm}")
-            raise ValueError(msg)
+                msg += f"   + [{i}] {pm}\n"  # these are from dfv (vars_lookup)
+
+            if dfvi.shape[0] > 1: 
+                # choose any one 
+                dfvi = dfvi.sample(n=1)
+                msg += "... choosing {} ~ {} from vars_lookup".format(dfvi[query].iloc[0], t_text)
+                if verbose: print(msg)
+            elif dfvi.shape[0] == 0: 
+                # it's possible that after removing duplicate tokens, we'll find a match
+                raise ValueError(msg)
         #################################################
 
         # if dfvi.shape[0] != 1: print("... Found n={} rows matching {}={} ...".format(dfvi.shape[0], query, t_text))
@@ -1462,7 +1482,9 @@ def feature_transform(df, target_cols=[], df_src=None, **kargs):
         print("[transform] size(loinc_lookup): {}".format(len(loinc_lookup)))
 
     if not vars_lookup: 
-       vars_lookup = LoincTSet.load_sdist_var_descriptors(target_cols)
+       vars_lookup = LoincTSet.load_sdist_var_descriptors(target_cols) 
+       # ... by default, process_string is invoked on the T-attributes
+
        assert len(vars_lookup) == len(target_cols)
        print("[transform] size(vars_lookup): {}".format(len(vars_lookup)))
 
@@ -1584,6 +1606,9 @@ def demo_create_vars_init(save=False):
 
     cohort = "hepatitis-c"
     col_target = 'test_result_loinc_code'
+
+    tProcessText = kargs.get("process_text", False)
+
     categories = ['easy', 'hard', 'low']  # low: low sample size
     ccmap = label_by_performance(cohort='hepatitis-c', categories=categories)
 
@@ -1640,7 +1665,10 @@ def demo_create_vars_init(save=False):
                     loincmap=loincmap, # source_values=dfp['test_order_name'].values)
                     drop_datatype_col=True, 
                     transformed_vars_only=transformed_vars_only, 
-                    uniq_src_vals=True, value_default=value_default)
+                    uniq_src_vals=True, 
+                    standardize=tProcessText, # if True, will trigger process_text() to clean punctuations, capitalize, remove stop words,etc
+
+                    value_default=value_default)
         msg = "Prior to transformation dim0: {}, after dim: {}\n".format(dim0, dfp.shape)
         print(msg)
         if not transformed_vars_only: 
@@ -1757,6 +1785,8 @@ def demo_create_vars(**kargs):
     print("(demo) size(loinc_lookup): {}".format(len(loinc_lookup)))
     
     vars_lookup = LoincTSet.load_sdist_var_descriptors(target_cols)
+    # ... by default, process_string is invoked on the T-attributes
+
     assert len(vars_lookup) == len(target_cols)
     print("(demo) size(vars_lookup): {}".format(len(vars_lookup)))
 
@@ -1980,6 +2010,7 @@ def test_data():
 
     target_cols = ['test_order_name', ]
     vars_lookup = LoincTSet.load_sdist_var_descriptors(target_cols)
+    # ... by default, process_string is invoked on the T-attributes
     
     # test_str = ["URINALYSIS W MICRO REFLEX CULTURE", ]
     n_miss = 0
@@ -2051,7 +2082,7 @@ def test():
     # demo_string_distance()
 
     # --- features based on string distances
-    demo_create_vars_init()
+    # demo_create_vars_init()
     demo_create_vars()
     demo_create_vars_part2()
 
