@@ -1023,7 +1023,7 @@ def visualize_training_data(ts, **kargs):
 
     # g.set_xticklabels(g.get_xticklabels(), rotation=45)
     # print(dir(g.ax_heatmap))
-    plt.setp(g.ax_heatmap.xaxis.get_majorticklabels(), rotation=45)
+    plt.setp(g.ax_heatmap.xaxis.get_majorticklabels(), rotation=75)
     # plt.setp(g.ax_heatmap.secondary_yaxis(), rotation=45)
     g.ax_heatmap.set_xticklabels(g.ax_heatmap.get_xmajorticklabels(), fontsize=16, fontweight='light')
     # ... horizontalalignment='right' shifts labels to the left
@@ -1252,7 +1252,7 @@ def demo_fearture_analysis(**kargs):
 def test(**kargs):
 
     ### Generate training data
-    demo_create_training_data()
+    # demo_create_training_data()
 
     ### Analyze features
     demo_fearture_analysis()
