@@ -1602,8 +1602,19 @@ def feature_transform(df, target_cols=[], df_src=None, **kargs):
 
     return X
 
-def demo_create_vars_init(save=False): 
+def demo_create_vars_init(save=False, recompute=False): 
     """
+    This routine creates a LOINC mapping (or loincmap) and generate string features. 
+
+    This subroutine can take a long time to complete depending on your platform. 
+    
+    A LOINC map resolves abbreviations by making comparisons between shortname and long common name from the LOINC fields. 
+
+    Please refer to the following paper for the details on LOINC string features: 
+
+        Parr SK, Shotwell MS, Jeffery AD, Lasko TA, Matheny ME. 
+        Automated mapping of laboratory tests to LOINC codes using noisy labels in a national electronic health record system database. 
+        Journal of the American Medical Informatics Association. 2018 Oct;25(10):1292-300.  
 
     Related
     -------
@@ -1611,6 +1622,13 @@ def demo_create_vars_init(save=False):
     """
     from analyzer import label_by_performance, col_values_by_codes, load_src_data
     from data_processor import save_data
+
+    if not recompute: 
+        # check to see if output files were already being generated
+        #    e.g. test_order_name-sdist-vars.csv, test_result_name-sdist-vars.csv
+
+        # [todo]
+        pass
 
     cohort = "hepatitis-c"
     col_target = 'test_result_loinc_code'
@@ -2091,7 +2109,7 @@ def test():
     # demo_string_distance()
 
     # --- features based on string distances
-    # demo_create_vars_init()
+    demo_create_vars_init()
     demo_create_vars()
     demo_create_vars_part2()
 

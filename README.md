@@ -22,9 +22,26 @@ For ease of illustration, we shall assume that the package (loinc_predictor) is 
 
 **1. Non-standard modules**: 
 
-   Please install the following dependent packages
+   Please install the following dependent packages:
+
+   1.a General purposes: 
    
-   - [tabulate](https://pypi.org/project/tabulate/): Pretty print tabular data such as pandas dataframe
+       - [tabulate](https://pypi.org/project/tabulate/): pretty prints tabular data such as pandas dataframe
+
+   1.b For visuailzing decision tree:
+
+       - [pydotplus](https://pydotplus.readthedocs.io/): provides a Python Interface to Graphviz’s Dot language
+       - [graphviz](https://www.graphviz.org/): an open-source graph visualization software
+          e.g. conda install graphviz
+   
+   1.c String matching algorithms: 
+
+       - [fuzzywuzzy](https://pypi.org/project/fuzzywuzzy/): computes distance between two sequences based on Levenshtein Distance
+       - [pyjarowinkler](https://pypi.org/project/pyjarowinkler/): computes Jaro-Winkler similarity
+       - [StringDist](https://pypi.org/project/StringDist/): computes Levenshtein distance & restricted Damerau-Levenshtein distance
+
+   Optional packages: 
+
    - [feature_selector](https://pypi.org/project/feature-selector/): Used to identify and select important features for ML algorithms
    - [gensim](https://pypi.org/project/gensim/): A library for information retrival, topic modeling, string comparisons and other NLP tasks 
 
@@ -32,6 +49,12 @@ For ease of illustration, we shall assume that the package (loinc_predictor) is 
 
 Training LOINC predictive models requires input training data. These data are assumed to 
 have been made available and kept under `<project_dir>/loinc_predictor/data`
+
+An example dataset sampled from Andromeda specific to the Hepatitis-C cohort is included under:
+
+      `data/andromeda-pond-hepatitis-c.csv.fake` 
+
+Note that due to the limit of file size and the sensitivity of the data, we are unable to host physical copies of certains file directly but instead, a link to physical file on the Amazon S3 bucket is included within these files. All the data files suffixed by .fake are such files including the example training data mentioned above.
 
 Data can be curated from subsampling Andromeda datalake. A few tips on the training data curation. 
 
@@ -66,20 +89,31 @@ Relevant files such as **LoincTable.csv**, MapTo.csv are expected to be read fro
 
 ## Directory Structure
 
+Each indivdual files include
+
 ```bash
 loinc_predictor/
 │
-├── analyzer.py (main entry) 
-├── Analyzer.ipynb (main entry for notebook)
-├── Learner.ipynb
+│
+├── config.py (system-wise configiration file)
+├── ClassifierArray.ipynb (main entry for the classifier array approach) 
+├── MatchmakerPredictor.py (main entry for the matchmaking approach; NOT completed, please use the following two files for now)
+│
+├── feature_gen.py (main entry for feature generation required for the Matchmaker)
+├── matchmaker_analyzer.py (a prototype for matchmaker; still under error analysis as the name suggested)     
+│
+├── analyzer.py (main analysis entry) 
 ├── ... 
 │
 ├── data/ 
+│   ├──  andromeda-pond-hepatitis-c.csv.fake (note that only this file is essential; the rest can generated)
+│   ├──  andromeda-pond-hepatitis-c-processed.csv.fake (generated via CleanTextData.py)
+│   ├──  andromeda-pond-hepatitis-c-balanced.csv.fake (generated via analyzer.py; may be time-consuming to generate)
 │
 ├── LoincTable/   
 │
 ├── result/
-│   ├── performance-hepatitis-c.csv
+│   ├──  performance-hepatitis-c.csv
 │   ...
 │
 ├── doc/
@@ -94,10 +128,12 @@ loinc_predictor/
 
 Input and Output
 ----------------
-* Data loading functions assume, by default, that the input comes from a data directory
-under the working directory e.g. <project_dir>/loinc_predictor/data
+* Data loader(s) assume, by default, that the input data comes from a "data" directory
+directly under the working/project directory (where all the python modules are kept)
 
-* Loinc tables and resources are by default read from the following directory: 
+    e.g. <project_dir>/loinc_predictor/data
+
+* The Loinc table and its resources are by default read from the following directory: 
 
      <project_dir>/loinc_predictor/LoincTable
 

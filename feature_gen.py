@@ -1252,7 +1252,7 @@ def demo_fearture_analysis(**kargs):
 def test(**kargs):
 
     ### Generate training data
-    # demo_create_training_data()
+    demo_create_training_data()
 
     ### Analyze features
     demo_fearture_analysis()
