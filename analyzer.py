@@ -15,6 +15,7 @@ import data_processor as dproc
 
 from utils_sys import highlight
 from utils_plot import saveFig # contains "matplotlib.use('Agg')" which needs to be called before pyplot 
+import sampling
 from matplotlib import pyplot as plt
 
 from loinc import LoincTable, LoincTSet, FeatureSet
@@ -592,25 +593,8 @@ def label_by_performance(cohort='hepatitis-c', th_low=0.50, th_high=0.90, catego
     return ccmap
 
 def sample_df_values(df, cols=[], **kargs): 
-
-    n_samples = kargs.get('n_samples', 10) # show example n values
-    verbose = kargs.get('verbose', 1)
-
-    if not cols: cols = df.columns.values
-
-    msg = ''
-    N = df.shape[0] 
-    df = df.sample(n=min(N, n_samples))
-
-    adict = {}
-    for i, col in enumerate(cols): 
-        ieff = i+1
-        msg += f"[{ieff}] (n={n_samples}):\n"
-
-        adict[col] = list(df[col].values)
-        msg += "    + {}: {}\n".format(col, list(df[col].values))
-    if verbose: print(msg)
-    return adict
+    # return adict
+    return sampling(df, cols=cols, **kargs)
 
 def list_unique_values(df, cols=[], **kargs):
     verbose = kargs.get('verbose', 1)
@@ -1622,6 +1606,22 @@ def demo_loinc(**kargs):
 
     return
 
+def demo_io(**kargs):
+    from loinc import FeatureSet, MatchmakerFeatureSet
+
+    cohort = kargs.get("cohort", "hepatitis-c")
+
+    df = load_src_data(cohort=cohort)   
+    matching_vars, regular_vars, target_vars, derived_vars, meta_vars = MatchmakerFeatureSet.categorize_features(df)
+
+    dfp = df[matching_vars+target_vars]
+    print("[demo] Only keep matching and target variables:\n{}\n".format(dfp.columns.values))
+
+    output_file = f"andromeda-pond-{cohort}-abridged.csv"
+    save_data(dfp, output_file=output_file)
+
+    return
+
 def test_indv(**kargs):
     
     # --- Feature value range analysis
@@ -1639,12 +1639,17 @@ def test_indv(**kargs):
     return
 
 def test(**kargs):
-    subjects = [ 'hard', ] # {'table', 'ts'/'data', 'hard', 'feature'/'vars'}
+    subjects = [ 'io', ] # {'io', 'table', 'ts'/'data', 'hard', 'feature'/'vars'}
     verbose = 1
+
+    cohort = 'hepatitis-c'
 
     for subject in subjects: 
 
         ### Analyze training data 
+        if subject.lower() in ('io', ):
+            demo_io(cohort=cohort)
+
         if subject.startswith(('d', 'ts')): 
             analyze_data_set()
 
@@ -1670,6 +1675,6 @@ def test(**kargs):
     return
 
 if __name__ == "__main__":
-    # test()
+    test()
 
-    test_indv()
+    # test_indv()

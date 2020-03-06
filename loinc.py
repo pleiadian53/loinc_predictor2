@@ -205,8 +205,8 @@ class LoincTSet(TSet):
         sep = kargs.get('sep', ',')
 
         # -- Text processing paramters to facilicate lookup
-        clean_text = kargs.get('clean_text', False)
-        remove_dup = kargs.get('remove_dup', False)
+        tProcessText = kargs.get('process_text', False)
+        tRemoveDupTokens = kargs.get('remove_dup', False)
 
         input_dir = kargs.get('input_dir', "data") # os.path.join(os.getcwd(), 'result')
         input_file = kargs.get('input_file', f"{dtype}-sdist-vars.csv")  
@@ -224,16 +224,15 @@ class LoincTSet(TSet):
             else: 
                 if verbose: print(msg)
 
-        if clean_text: 
+        if tProcessText: 
             from functools import partial
             # from CleanTextData import clean_term
             from text_processor import process_string
             # sometimes it may be necessary to clean T-attributes
             if verbose > 1: 
-                print("(load_sdist_vars) cleaning vars file: {}".format(input_path))
+                print("(load_sdist_vars) Cleaning vars file: {}".format(input_path))
                 print("... (before) df:\n{}\n".format(df.head(10)[dtype]))
-            process_string2 = partial(process_string, doc_type='string', remove_dup=remove_dup)
-            df[dtype] = df[dtype].apply(process_string2)
+            df[dtype] = df[dtype].apply( partial(process_string, doc_type='string', remove_dup=tRemoveDupTokens) )
             if verbose > 1: 
                 print("... (after) df:\n{}\n".format(df.head(10)[dtype]))
         
@@ -384,7 +383,7 @@ class FeatureSet(object):
         if ns > 0: assert ns == len(fsets)
         fsets2 = []
         for i, fset in enumerate(fsets): 
-            if len(suffix_set[i]) > 0: 
+            if ns > 0 and len(suffix_set[i]) > 0: 
                 fsets2.append(["{}_{}".format(v, suffix_set[i]) for v in fset])
             else: 
                 fsets2.append(fset)
@@ -565,7 +564,7 @@ class MatchmakerFeatureSet(FeatureSet):
         return [MatchmakerFeatureSet.col_assignment, ] + cols + descriptors
 
     @staticmethod
-    def categorize_features(ts, remove_prefix=True): 
+    def categorize_features(ts, remove_prefix=False): 
         """
         Categorize variables prior to the feature transform (see feature_gen.text_feature_transform)
         """
@@ -805,6 +804,7 @@ def expand_by_longname(df, col_src='test_result_loinc_code',
 
 def sample_loinc_table(codes=[], cols=[], input_dir='LoincTable', input_file='', **kargs): 
     from transformer import dehyphenate
+    import sampling
     # from tabulate import tabulate
 
     col_key = kargs.get('col_key', 'LOINC_NUM')
@@ -834,7 +834,7 @@ def sample_loinc_table(codes=[], cols=[], input_dir='LoincTable', input_file='',
                 if len(v) == 1: v = v[0]
                 msg += "  - {}: {}\n".format(col, v)
 
-            adict[code] = sample_df_values(dfi, verbose=0) # sample_df_values() returns a dictionary: column -> value
+            adict[code] = sampling.sample_df_values(dfi, verbose=0) # sample_df_values() returns a dictionary: column -> value
     if verbose: print(msg)
 
     return adict
@@ -1179,8 +1179,6 @@ def make_6p(df, code, col_key='LOINC_NUM', sep='|', dtype='str'):
     return dict(zip(LoincTable.p6, p6))
 
 def demo_loinc(**kargs):
-    from analyzer import load_loinc_table, sample_loinc_table
-
     df_loinc = load_loinc_table(dehyphenate=True) 
     
     codes = ['10058', '103317']

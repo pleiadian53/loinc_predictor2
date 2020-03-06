@@ -1018,20 +1018,22 @@ def feature_transform(df, target_cols=[], df_src=None, **kargs):
                     tHasSignal = False
                     msg = f"[{r}] Code(+): {code}\n"
                     for target_col, entry in named_scores.items(): 
-                        msg += "... Col: {}: {}\n".format(target_col, row[target_col])
-                        msg += "... LN:  {}: {}\n".format(code, loinc_lookup[code][col_ln])
+                        msg_t =  "... Col: {}: {}\n".format(target_col, process_string(row[target_col]))
+                        msg_t += "... LN:  {}: {}\n".format(code, process_string(loinc_lookup[code][col_ln]))
                         
                         for target_dpt, score in entry.items():
                             n_comparisons_pos += 1
                             if score > 0: 
                                 n_detected += 1
+                                msg += msg_t
                                 msg += "    + {}: {}\n".format(target_dpt, score)
                                 # nonzeros.append((target_col, target_dpt, score))
                                 # positive_scores[target_col][target_dpt] = score
                                 tHasSignal = True
                     # ------------------------------------------------
-                    if not tHasSignal: msg += "    + No similar properties found between {} and {} #\n".format(target_cols, target_descriptors)
-                    print(msg)
+                    if not tHasSignal: 
+                        msg += "    + No similar properties found between {} and {} #\n".format(target_cols, target_descriptors)
+                        print(msg); msg = ""
                     if tHasSignal: 
                         highlight(show_evidence(row, code=code, sdict=named_scores, print_=False), symbol='#')
                 #########################################################################
@@ -1051,23 +1053,24 @@ def feature_transform(df, target_cols=[], df_src=None, **kargs):
                         if verify: 
                             tHasSignal = False
                             # positive_scores = defaultdict(dict)
-                            msg = f"[{r}] Code(-): {code_neg}\n"
+                            msg = f"[{r}] Code(-): {code_neg} in place of {code}, what happens?\n"
                             for target_col, entry in named_scores.items(): 
-                                msg += "... Col: {}: {}\n".format(target_col, row[target_col])
-                                msg += "... LN:  {}: {}\n".format(code_neg, loinc_lookup[code_neg][col_ln])
+                                msg_t =  "... Col: {}: {}\n".format(target_col, process_string(row[target_col]))
+                                msg_t += "... LN:  {}: {}\n".format(code_neg, process_string(loinc_lookup[code_neg][col_ln]))
 
                                 # nonzeros = []
                                 for target_dpt, score in entry.items():
                                     n_comparisons_neg += 1
                                     if score > 0: 
                                         n_detected_in_negatives += 1
+                                        msg = msg_t 
                                         msg += "    + {}: {}\n".format(target_dpt, score)
                                         # positive_scores[target_col][target_dpt] = score
                                         tHasSignal = True
 
                                 if tHasSignal: 
                                     msg += "    + Found similar properties between T-attributes(code={}) and negative: {}  ###\n".format(code, code_neg)
-                                print(msg)  
+                                    print(msg); msg = ""  
                                 if tHasSignal: 
                                     highlight(show_evidence(row, code=code, code_neg=code_neg, sdict=positive_scores, print_=False), symbol='#')
                         # ------------------------------------------------
@@ -1249,7 +1252,7 @@ def demo_create_vars(**kargs):
                         neg_instances.append(scores)
                         
                         positive_scores = defaultdict(dict)
-                        msg = f"[{r}] Code(-): {code_neg}\n"
+                        msg = f"[{r}] Code(-): {code_neg} ... if we deliberately assign this code\n"
                         for target_col, entry in named_scores.items(): 
                             msg += "... Col: {}: {}\n".format(target_col, row[target_col])
                             msg += "... LN:  {}: {}\n".format(code_neg, loinc_lookup[code_neg][col_ln])

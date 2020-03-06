@@ -104,6 +104,7 @@ def load_data(**kargs):
 
     exclude_vars = kargs.pop('exclude_vars', [])
     col_target = kargs.pop('col_target', config.loinc_col) # usually, this is "test_result_loinc_name"
+    verbose = kargs.get('verbose', 1)
     
     df = load_src_data(**kargs)
     

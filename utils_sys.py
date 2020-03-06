@@ -521,7 +521,7 @@ def sample_hashtable(hashtable, n_sample=10):
 
     n_sampled = 0
     tb = copy.deepcopy(hashtable)
-    R = tb.keys(); random.shuffle(R)
+    R = list(tb.keys()); random.shuffle(R)
     nT = sum([len(v) for v in tb.values()])
     print('sample_hashtable> Total keys: %d, members: %d' % (len(R), nT))
     
