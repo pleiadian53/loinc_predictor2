@@ -138,11 +138,11 @@ def load_src_data(**kargs):
 
     if not input_file: 
         if isProcessed: 
-            input_file = default_input_file
+            input_file = default_processed_file
             # ... e.g. f"andromeda-pond-{cohort}-processed.csv"  
             # if this file does not exist yet, then we need to generate it via CleanTextData.import_source_data()
         else:
-            input_file = default_processed_file
+            input_file = default_input_file 
             # ... e.g. f"andromeda-pond-{cohort}.csv" 
     input_path = os.path.join(input_dir, input_file)
 
