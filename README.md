@@ -22,23 +22,23 @@ For ease of illustration, we shall assume that the package (loinc_predictor) is 
 
 **1. Non-standard modules**: 
 
-   Please install the following dependent packages:
+    Please install the following dependent packages:
 
-   1.a General purposes: 
+    1a. General purposes: 
    
-       - [tabulate](https://pypi.org/project/tabulate/): pretty prints tabular data such as pandas dataframe
+        - [tabulate](https://pypi.org/project/tabulate/): pretty prints tabular data such as pandas dataframe
 
-   1.b For visuailzing decision tree:
+    1b. For visuailzing decision tree:
 
-       - [pydotplus](https://pydotplus.readthedocs.io/): provides a Python Interface to Graphviz’s Dot language
-       - [graphviz](https://www.graphviz.org/): an open-source graph visualization software
-          e.g. conda install graphviz
+        - [pydotplus](https://pydotplus.readthedocs.io/): provides a Python Interface to Graphviz’s Dot language
+        - [graphviz](https://www.graphviz.org/): an open-source graph visualization software
+           e.g. conda install graphviz
    
-   1.c String matching algorithms: 
+    1c. String matching algorithms: 
 
-       - [fuzzywuzzy](https://pypi.org/project/fuzzywuzzy/): computes distance between two sequences based on Levenshtein Distance
-       - [pyjarowinkler](https://pypi.org/project/pyjarowinkler/): computes Jaro-Winkler similarity
-       - [StringDist](https://pypi.org/project/StringDist/): computes Levenshtein distance & restricted Damerau-Levenshtein distance
+        - [fuzzywuzzy](https://pypi.org/project/fuzzywuzzy/): computes distance between two sequences based on Levenshtein Distance
+        - [pyjarowinkler](https://pypi.org/project/pyjarowinkler/): computes Jaro-Winkler similarity
+        - [StringDist](https://pypi.org/project/StringDist/): computes Levenshtein distance & restricted Damerau-Levenshtein distance
 
    Optional packages: 
 
@@ -52,7 +52,7 @@ have been made available and kept under `<project_dir>/loinc_predictor/data`
 
 An example dataset sampled from Andromeda specific to the Hepatitis-C cohort is included under:
 
-      `data/andromeda-pond-hepatitis-c.csv.fake` 
+        data/andromeda-pond-hepatitis-c.csv.fake 
 
 Note that due to the limit of file size and the sensitivity of the data, we are unable to host physical copies of certains file directly but instead, a link to physical file on the Amazon S3 bucket is included within these files. All the data files suffixed by .fake are such files including the example training data mentioned above.
 
