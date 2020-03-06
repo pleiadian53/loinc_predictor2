@@ -22,28 +22,31 @@ For ease of illustration, we shall assume that the package (loinc_predictor) is 
 
 **1. Non-standard modules**: 
 
-    Please install the following dependent packages:
+Please install the following dependent packages:
 
-    1a. General purposes: 
+
+1a. General purposes: 
    
-        - [tabulate](https://pypi.org/project/tabulate/): pretty prints tabular data such as pandas dataframe
+   - [tabulate](https://pypi.org/project/tabulate/): pretty prints tabular data such as pandas dataframe
 
-    1b. For visuailzing decision tree:
+1b. For visuailzing decision tree:
 
-        - [pydotplus](https://pydotplus.readthedocs.io/): provides a Python Interface to Graphviz’s Dot language
-        - [graphviz](https://www.graphviz.org/): an open-source graph visualization software
-           e.g. conda install graphviz
+   - [pydotplus](https://pydotplus.readthedocs.io/): provides a Python Interface to Graphviz’s Dot language
+   - [graphviz](https://www.graphviz.org/): an open-source graph visualization software
+        
+      e.g. conda install graphviz
    
-    1c. String matching algorithms: 
+1c. String matching algorithms: 
 
-        - [fuzzywuzzy](https://pypi.org/project/fuzzywuzzy/): computes distance between two sequences based on Levenshtein Distance
-        - [pyjarowinkler](https://pypi.org/project/pyjarowinkler/): computes Jaro-Winkler similarity
-        - [StringDist](https://pypi.org/project/StringDist/): computes Levenshtein distance & restricted Damerau-Levenshtein distance
+   - [fuzzywuzzy](https://pypi.org/project/fuzzywuzzy/): computes distance between two sequences based on Levenshtein Distance
+   - [pyjarowinkler](https://pypi.org/project/pyjarowinkler/): computes Jaro-Winkler similarity
+   - [StringDist](https://pypi.org/project/StringDist/): computes Levenshtein distance & restricted Damerau-Levenshtein distance
 
    Optional packages: 
 
    - [feature_selector](https://pypi.org/project/feature-selector/): Used to identify and select important features for ML algorithms
    - [gensim](https://pypi.org/project/gensim/): A library for information retrival, topic modeling, string comparisons and other NLP tasks 
+   
 
 **2. Input data**:
 
