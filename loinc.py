@@ -557,6 +557,8 @@ class MatchmakerFeatureSet(FeatureSet):
 
     high_card_cols = list(set(cat_cols)-set(FeatureSet.low_card_cols)-set(matching_cols))
 
+    models = ['sdist', 'tfidf']
+
     @staticmethod
     def customize_meta_cols(cols, descriptors):
         assert np.all([col in MatchmakerFeatureSet.matching_cols for col in cols]), "Invalid T-attributes: {}".format(cols)
@@ -639,6 +641,43 @@ class MatchmakerFeatureSet(FeatureSet):
         regular_vars = sorted(set(V)-set(matching_vars)-set(target_vars)-set(derived_vars)-set(meta_vars)-set(result_vars), key=V.index)
 
         return (matching_vars, regular_vars, target_vars, derived_vars, meta_vars)
+
+    @staticmethod
+    def iter_rules(multibag): 
+        for k, dk in multibag.items():
+            for x in dk:
+                yield (k, x)
+
+    @staticmethod
+    def get_matching_feature_names(matching_rules={}, t_cols=[], l_cols=[]): 
+        def melt_rules(): 
+            t_attributes = set([])
+            l_descriptors = set([])
+            for tattr, descriptors in matching_rules.items(): 
+                t_attributes.add(tattr)
+                l_descriptors.update(descriptors)
+            return list(t_attributes), list(l_descriptors)
+        def get_pairs():
+            if len(matching_rules) > 0: 
+                for t_col, l_cols in matching_rules.items():
+                    for l_col in l_cols:
+                        yield (t_col, l_col)
+            else: 
+                for col, dpt in itertools.product(t_cols, l_cols): 
+                    yield (col, dpt)
+
+        import itertools
+
+        if len(matching_rules) > 0: 
+            t_cols, l_cols = melt_rules()
+        else: 
+            assert len(t_cols) > 0 and len(l_cols) > 0
+
+        attributes = []
+        for t_col, l_col, m in itertools.product(t_cols, l_cols, MatchmakerFeatureSet.models): 
+            attributes.append(f"{t_col}_{l_col}_{m}")
+    
+        return attributes
 
     @staticmethod
     def drop_untracked(ts, verbose=1):
@@ -725,7 +764,8 @@ def load_loinc_table(input_dir='LoincTable', input_file='', **kargs):
     assert os.path.exists(input_path), "Invalid path: {}".format(input_path)
 
     df = pd.read_csv(input_path, sep=sep, header=0, index_col=None, error_bad_lines=False)
-    print("> dim(table): {}".format(df.shape)) 
+    loinc_set = df[LoincTable.col_code].unique()
+    print("> dim(table): {} | n(codes): {}\n... examples:\n{}\n".format(df.shape, len(loinc_set), np.random.choice(loinc_set, 10))) 
 
     if dehyphen: 
         col_key = LoincTable.table_key_map.get(input_file, LoincTable.col_code) # 'LOINC_NUM'
@@ -922,6 +962,7 @@ def compare_longname_mtrt(df_mtrt=None, df_loinc=None, n_display=-1, codes=[], *
     -------
     mtrt_to_loinc.demo_parse()
     """
+    from loinc_mtrt import LoincMTRT
     verbose = kargs.get('verbose', 1)
 
     table_mtrt = kargs.get('input_mtrt', 'loinc-leela.csv')
@@ -1198,7 +1239,8 @@ def demo_mtrt():
     """
 
     """
-
+    from loinc_mtrt import LoincMTRT
+    
     dehyphenate = True
     df_mtrt = LoincMTRT.load_table(dehyphenate=dehyphenate) 
 
@@ -1233,12 +1275,20 @@ def demo_feature_naming(**kargs):
     joined_set = FeatureSet.join_features([['fa', 'fb', 'fc'], ['fb', 'fc', 'fd']], suffix_set=['', 'y', ])
     print("... joined set:\n{}\n".format(joined_set))
 
+    # --- matching feature names 
+    matching_rules = {'test_order_name': [LoincTable.col_ln, LoincTable.col_sn, LoincTable.col_com, ], 
+                      'test_result_name': [LoincTable.col_sn, LoincTable.col_sys, LoincTable.col_prop, ], 
+                      }
+    var_names = MatchmakerFeatureSet.get_matching_feature_names(matching_rules=matching_rules)
+    print("(demo) matching_rules:\n{}\n".format(matching_rules))
+    print("...    vars:\n{}\n".format(var_names))
+
     return 
 
 def test(**kargs): 
 
     # --- LOINC attributes
-    # demo_loinc(**kargs)
+    demo_loinc(**kargs)
 
     # --- MTRT table (leela)
     # demo_mtrt()

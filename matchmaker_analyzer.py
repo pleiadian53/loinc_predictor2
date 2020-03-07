@@ -263,15 +263,18 @@ def demo_predict(**kargs):
     ts_test = pd.concat([ts_test, df_derived, df_meta], axis=1)
 
     ts_test.sort_values(by=[col_target, col_score], ascending=False, inplace=True)
-    fg.save_dataset(ts_test, dtype='test', cohort=cohort, verbose=1, suffix=0)
+    fg.save_dataset(ts_test, dtype='test', cohort=cohort, verbose=1, suffix="scored")
     # ... append a 'suffix' to not overwrite the original data
     ###########################################################
     # ... Save analysis data
 
-    header = ["existing", "confidence", "correctness", "alternatives"]
+    conf_threshold = 0.85  # any confidence score lower than this is considered problematic 
+
+    header = ["assigned", "conf_score", "label", "alternatives"]
     predictions = {h:[] for h in header}
 
-    
+    ts_test_low_conf = ts_test.loc[ts_test[col_score] < conf_threshold]
+
     # propose candidates
     # rank candidates    
 

@@ -402,7 +402,7 @@ def text_feature_transform(df, **kargs):
 
     attributes = []
     N0 = df.shape[0]
-    feature_suffices = ['sdist', 'tfidf', ] # has to be in accordance with compute_similarity_with_loinc()
+    feature_suffices = MatchmakerFeatureSet.models # ['sdist', 'tfidf', ] 
     for code, dfc in df.groupby([LoincTSet.col_code, ]):
         n_codes += 1
 
