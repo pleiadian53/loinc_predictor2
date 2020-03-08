@@ -178,6 +178,12 @@ def analyzeDecisionPaths(X, y, features=[], **kargs):
     return model, best_params, best_scores, best_thresholds
 
 def demo_predict(**kargs): 
+    """
+    Demo for predicting LOINC codes assuming that training and test data have been created
+    via feature_gen()
+
+    """
+
     from data_processor import load_generic, toXY
     import feature_gen as fg
 

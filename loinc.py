@@ -764,13 +764,14 @@ def load_loinc_table(input_dir='LoincTable', input_file='', **kargs):
     assert os.path.exists(input_path), "Invalid path: {}".format(input_path)
 
     df = pd.read_csv(input_path, sep=sep, header=0, index_col=None, error_bad_lines=False)
-    loinc_set = df[LoincTable.col_code].unique()
-    print("> dim(table): {} | n(codes): {}\n... examples:\n{}\n".format(df.shape, len(loinc_set), np.random.choice(loinc_set, 10))) 
+    # loinc_set = df[LoincTable.col_code].unique() 
 
     if dehyphen: 
         col_key = LoincTable.table_key_map.get(input_file, LoincTable.col_code) # 'LOINC_NUM'
         df = dehyphenate(df, col=col_key, drop_cbit=drop_cbit)  # inplace
 
+    loinc_set = df[LoincTable.col_code].unique() 
+    print("(loinc_table) dim(table): {} | n(codes): {}\n... examples:\n{}\n".format(df.shape, len(loinc_set), np.random.choice(loinc_set, 10)))
     return df
 
 # --- LOINC Utilities 
@@ -1240,7 +1241,7 @@ def demo_mtrt():
 
     """
     from loinc_mtrt import LoincMTRT
-    
+
     dehyphenate = True
     df_mtrt = LoincMTRT.load_table(dehyphenate=dehyphenate) 
 

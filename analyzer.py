@@ -502,10 +502,11 @@ def save_performance(df, output_dir='result', output_file='', **kargs):
     output_dir = kargs.get('output_dir', os.path.join(os.getcwd(), output_dir)) 
     if not output_file: output_file = f"performance-{cohort}.csv" 
     output_path = os.path.join(output_dir, output_file)
+
+    if verbose: print('[save] Saving performance dataframe to:\n{}\n ... #'.format(output_path))
     df.to_csv(output_path, sep=sep, index=False, header=True)
 
-    if verbose: 
-        print('(save) Saving performance dataframe to:\n{}\n ... #'.format(output_path))
+    if verbose > 1: 
         for code, score in zip(df['code'], df['mean']):
             print(f"[{code}] -> {score}")
     return
@@ -558,6 +559,7 @@ def label_by_performance(cohort='hepatitis-c', th_low=0.50, th_high=0.90, catego
     """
     from loinc import is_valid_loinc
     df_perf = load_performance(input_dir='result', cohort=cohort)
+    print("(label_by_performance) cols(df_perf): {}".format(df_perf.columns.values))
     target_codes = codes = df_perf['code'].values  # codes associated with a given cohort (e.g. hepatitis c)
     n_codes = len(codes)
 

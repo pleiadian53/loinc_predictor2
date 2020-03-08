@@ -1226,7 +1226,7 @@ def iter_rules(multibag):
     for k, dk in multibag.items():
         for x in dk:
             yield (k, x)
-def compute_similarity_with_loinc(row, code, target_cols=[], loinc_lookup={}, vars_lookup={}, **kargs):
+def compute_similarity_with_loinc(row, code, loinc_lookup={}, vars_lookup={}, **kargs):
     #from scipy.spatial import distance # cosine similarity
     import itertools
     # from functools import partial
@@ -1256,13 +1256,15 @@ def compute_similarity_with_loinc(row, code, target_cols=[], loinc_lookup={}, va
     # algorithm parameters 
     topn = kargs.get('topn', -1)
     
-    target_descriptors = kargs.get('target_descriptors', [col_sn, col_ln, col_com])
-    if len(target_cols) == 0: 
-        target_cols = ['test_order_name', 'test_result_name', 'test_specimen_type', 'test_result_units_of_measure', ]
-        # ... other attributes: 'panel_order_name'
+    # --- Matching Rules --- 
+    target_cols = kargs.get("target_cols", ['test_order_name', 'test_result_name', ] )
+    # ... other attributes: 'panel_order_name', 'test_specimen_type', 'test_result_units_of_measure'
+    assert np.all([col in row.index for col in target_cols])
 
-        print("[feature generation] Variables defined wrt corpus from following attributes:\n{}\n".format(target_cols))
-        assert np.all([col in row.index for col in target_cols])
+    target_descriptors = kargs.get('target_loinc_cols', [col_sn, col_ln, col_com])
+
+    if not matching_rules: matching_rules = {target_col: target_descriptors for target_col in target_cols}
+    ########################
 
     if not loinc_lookup: loinc_lookup = lmt.get_loinc_descriptors(dehyphenate=dehyphen, remove_dup=remove_dup_tokens, verify=True)
     if not vars_lookup: 
@@ -1394,7 +1396,7 @@ def compute_similarity_with_loinc(row, code, target_cols=[], loinc_lookup={}, va
     #     # return list(zip(attributes, scores))
     return scores, attributes, named_scores
 
-def feature_transform(df, target_cols=[], df_src=None, **kargs): 
+def feature_transform(df, df_src=None, **kargs): 
     """
     Convert T-attributes string distance-based feature matrix with respect to the LOINC descriptors
 
@@ -1443,31 +1445,26 @@ def feature_transform(df, target_cols=[], df_src=None, **kargs):
     col_sys = LoincTable.col_sys
     col_method = LoincTable.col_method
     ######################################
+
     # --- training data attributes 
     col_target = LoincTSet.col_target # 'test_result_loinc_code'
-
-    # use the entire source as training corpus
-
-    # --- matching rules
-    ######################################
     tProcessText = kargs.get('process_text', True)
     tRemoveDupTokens = kargs.get('remove_dup', True)
+
+    # --- matching rules --- 
+    ######################################
     matching_rules = kargs.get('matching_rules', {})
 
-    if len(target_cols) == 0: 
-        print("[transform] By default, we'll compare following variables with LOINC descriptors:\n{}\n".format(target_cols))
-        target_cols = ['test_order_name', 'test_result_name',  ] # 'test_result_units_of_measure',
+    target_cols = kargs.get("target_cols", ['test_order_name', 'test_result_name',  ]) 
+    print("[transform] By default, we make pairwise comparisons between following variables and LOINC descriptors:\n{}\n".format(target_cols))
     assert np.all(col in df.columns for col in target_cols)
-    # ... other fields: 'panel_order_name'
-    target_descriptors = [col_sn, col_ln, col_com, ]
+    # ... other fields: 'panel_order_name', 'test_result_units_of_measure'
 
-    if not matching_rules: 
-        matching_rules = {'test_order_name': [col_sn, col_ln, col_com, ], 
-                          'test_result_name': [col_sn, col_ln, col_com, ], 
-                          # 'test_specimen_type': [col_sys, ], 
-                          # 'test_result_units_of_measure': [col_sn, col_method]
-                          }
+    target_descriptors = kargs.get("target_loinc_cols", [col_sn, col_ln, col_com, ])
+
+    if not matching_rules: matching_rules = {target_col: target_descriptors for target_col in target_cols}
     ######################################
+
     highlight("Gathering training corpus (by default, use all data assoc. with target cohort: {} ...".format(cohort), symbol='#')
     if df_src is None: df_src = load_src_data(cohort=cohort, warn_bad_lines=False, canonicalized=True, processed=False)
 
@@ -1602,7 +1599,7 @@ def feature_transform(df, target_cols=[], df_src=None, **kargs):
 
     return X
 
-def demo_create_vars_init(save=False, recompute=False): 
+def demo_create_vars_init(save=False, recompute=False, **kargs): 
     """
     This routine creates a LOINC mapping (or loincmap) and generate string features. 
 
@@ -1645,7 +1642,7 @@ def demo_create_vars_init(save=False, recompute=False):
     target_codes = list(set(np.hstack([codes_hard, codes_lsz])))
 
     ######################################
-    dfp = load_src_data(cohort=cohort, warn_bad_lines=False, canonicalized=True, processed=True)
+    dfp = load_src_data(cohort=cohort, warn_bad_lines=False, canonicalized=True, processed=False)
     # adict = col_values_by_codes(target_codes, df=dfp, cols=['test_result_name', 'test_order_name'], mode='raw')
     # dfp = dfp.loc[dfp[col_target].isin(target_codes)]
     ######################################
@@ -1795,11 +1792,13 @@ def demo_create_vars(**kargs):
     # ... other fields: 'panel_order_name'
 
     target_descriptors = [col_sn, col_ln, col_com, ]
-    matching_rules = {'test_order_name': [col_sn, col_ln, col_com, ], 
-                      'test_result_name': [col_sn, col_ln, col_com, ], 
-                      # 'test_specimen_type': [col_sys, ], 
-                      # 'test_result_units_of_measure': [col_sn, col_method]
-                      }
+    matching_rules = kargs.get('matching_rules', 
+                            { 'test_order_name': [col_sn, col_ln, col_com, ],  # col_sys
+                               # 'test_result_name': [col_sn, col_ln, col_com,  ], #  col_sys, col_prop
+                               # 'test_specimen_type': [col_sys, ], 
+                               # 'test_result_units_of_measure': [col_sn, col_prop], }
+                               }
+                       )
     # Note: Expand tokes when matching with LN
     ######################################
 
@@ -2109,7 +2108,7 @@ def test():
     # demo_string_distance()
 
     # --- features based on string distances
-    demo_create_vars_init()
+    # demo_create_vars_init()
     demo_create_vars()
     demo_create_vars_part2()
 

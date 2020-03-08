@@ -558,7 +558,7 @@ def cosine_similarity(s1, s2, model, value_default=0.0):
     #     print("(cosine_similarity) s2: {} => {}".format(s2, v2))
     return s
 
-def compute_similarity_with_loinc(row, code, model, loinc_lookup={}, target_cols=[], value_default=0.0, **kargs):
+def compute_similarity_with_loinc(row, code, model, loinc_lookup={}, value_default=0.0, **kargs):
     def iter_rules(target_cols, target_descriptors):
         if len(matching_rules) > 0: 
             for col, target_descriptors in matching_rules.items():
@@ -582,17 +582,20 @@ def compute_similarity_with_loinc(row, code, model, loinc_lookup={}, target_cols
 
     dehyphen = kargs.get('dehyphenate', True)
     remove_dup_tokens = kargs.get('remove_dup', False)
-    matching_rules = kargs.get('matching_rules', {})  # a dictionary from T-attributes to Loinc descriptors
     class_label = kargs.get('label', '?') # optinal meta data for testing/interpretation 
     # return_name_values = kargs.get('return_name_values', False)
     
-    target_descriptors = kargs.get('target_descriptors', [col_sn, col_ln, col_com])
-    if len(target_cols) == 0: 
-        target_cols = ['test_order_name', 'test_result_name', 'test_specimen_type', 'test_result_units_of_measure', ]
-        # ... other attributes: 'panel_order_name'
+    # --- Matching Rules ---
+    matching_rules = kargs.get('matching_rules', {})  # a dictionary from T-attributes to Loinc descriptors
 
-        print("[feature generation] Variables defined wrt corpus from following attributes:\n{}\n".format(target_cols))
-        assert np.all([col in row.index for col in target_cols])
+    target_cols = kargs.get("target_cols", ['test_order_name', 'test_result_name', ] )
+    # ... other attributes: 'panel_order_name', 'test_specimen_type', 'test_result_units_of_measure'
+    # print("[similarity] Training corpus is defined via following T-attributes:\n{}\n".format(target_cols))
+    assert np.all([col in row.index for col in target_cols])
+
+    target_descriptors = kargs.get('target_loinc_cols', [col_sn, col_ln, col_com])
+    if not matching_rules: matching_rules = {target_col: target_descriptors for target_col in target_cols}
+    # ----------------------- 
 
     if not loinc_lookup: loinc_lookup = lmt.get_loinc_descriptors(dehyphenate=dehyphen, remove_dup=remove_dup_tokens, verify=True)
         
@@ -888,7 +891,7 @@ def demo_tfidf(**kargs):
 
     return
 
-def feature_transform(df, target_cols=[], df_src=None, **kargs): 
+def feature_transform(df, df_src=None, **kargs): 
     """
     Convert T-attributes into TF-IDF feature matrix with respect to the LOINC descriptors
 
@@ -939,22 +942,29 @@ def feature_transform(df, target_cols=[], df_src=None, **kargs):
     # --- training data attributes 
     col_target = LoincTSet.col_target # 'test_result_loinc_code'
 
-    # use the entire source as training corpus
 
-    # --- matching rules
+    # --- Matching Rules --- 
     ######################################
-    if len(target_cols) == 0: 
-        print("[transform] By default, we'll compare following variables with LOINC descriptors:\n{}\n".format(target_cols))
-        target_cols = ['test_order_name', 'test_result_name', 'test_result_units_of_measure', ]
+    matching_rules = kargs.get('matching_rules', {})
+
+    target_cols = kargs.get("target_cols", ['test_order_name', 'test_result_name', ] )
+    # ... other attributes: 'panel_order_name', 'test_specimen_type', 'test_result_units_of_measure'
+    print("[transform] By default, pairwise comparisons are made between the follwwing vars and LOINC descriptors:\n{}\n".format(target_cols))
     assert np.all(col in df.columns for col in target_cols)
     # ... other fields: 'panel_order_name'
-    target_descriptors = [col_sn, col_ln, col_com, ]
-    matching_rules = {'test_order_name': [col_sn, col_ln, col_com, ], 
-                      'test_result_name': [col_sn, col_ln, col_com, ], 
-                      # 'test_specimen_type': [col_sys, ], 
-                      'test_result_units_of_measure': [col_sn, col_method], 
-                      }
+
+    target_descriptors = kargs.get('target_loinc_cols', [col_sn, col_ln, col_com, col_sys, ])
+
+    if not matching_rules: matching_rules = {target_col: target_descriptors for target_col in target_cols}
+    # "matching_rules" is a map from T-atrributes to LOINC attributes 
+    # E.g. 
+    # matching_rules = {'test_order_name': [col_sn, col_ln, col_com, ], 
+    #                   'test_result_name': [col_sn, col_ln, col_com, ], 
+    #                   # 'test_specimen_type': [col_sys, ], 
+    #                   # 'test_result_units_of_measure': [col_sn, col_method], 
+    #                   }
     ######################################
+
     highlight("Gathering training corpus (by default, use all data assoc. with target cohort: {} ...".format(cohort), symbol='#')
     if df_src is None: df_src = load_src_data(cohort=cohort, warn_bad_lines=False, canonicalized=True, processed=True)
     col_new = 'corpus'
@@ -1162,11 +1172,13 @@ def demo_create_vars(**kargs):
     # ... other fields: 'panel_order_name'
 
     target_descriptors = [col_sn, col_ln, col_com, ]
-    matching_rules = {'test_order_name': [col_sn, col_ln, col_com, ], 
-                      'test_result_name': [col_sn, col_ln, col_com, ], 
-                      # 'test_specimen_type': [col_sys, ], 
-                      'test_result_units_of_measure': [col_sn, col_method]
-                      }
+    matching_rules = kargs.get('matching_rules', 
+                            { 'test_order_name': [col_sn, col_ln, col_com, ],  # col_sys
+                               # 'test_result_name': [col_sn, col_ln, col_com,  ], #  col_sys, col_prop
+                               # 'test_specimen_type': [col_sys, ], 
+                               # 'test_result_units_of_measure': [col_sn, col_prop], }
+                               }
+                       )
     ######################################
     
     highlight("Constructing corpus ...", symbol='#')

@@ -282,7 +282,6 @@ def text_feature_transform(df, **kargs):
     df_src = kargs.get('df_src', None)
     if not cohort: assert df_src is not None
 
-    target_cols = kargs.get('target_cols', ['test_order_name', 'test_result_name', 'test_result_units_of_measure', ])
     target_codes = kargs.get('target_codes', list(df[col_target].unique())) 
 
     loinc_lookup = kargs.get('loinc_lookup', {})
@@ -311,23 +310,24 @@ def text_feature_transform(df, **kargs):
     # ... df: redefined to only include matchmaking variables + target (e.g. LOINC code)
     # ... why? because then we could append dfX as a separate process to incorporate non-matching variables when desired
 
-    # --- Define matching rules
+    # --- Define matching rules --- 
     ######################################
+    target_cols = kargs.get('target_cols', ['test_order_name', 'test_result_name', ]) # options: 'test_result_units_of_measure',
+
     print("[transform] The following T-attributes are to be compared with LOINC descriptors:\n{}\n".format(target_cols))
     assert np.all(col in df.columns for col in target_cols)
 
     # ... other fields: 'panel_order_name'
-    target_descriptors = [col_sn, col_ln, col_com, col_sys, ]
-    if not matching_rules: 
-        matching_rules = {target_col: target_descriptors for target_col in target_cols}
-        
-        # e.g.
-        # matching_rules = {'test_order_name': [col_sn, col_ln, col_com, col_sys, ], 
-        #                   'test_result_name': [col_sn, col_ln, col_com, col_sys, col_prop, ], 
-        #                   'test_specimen_type': [col_sys, ], 
-        #                   'test_result_units_of_measure': [col_sn, col_prop], 
-        #                   }
+    target_descriptors = kargs.get('target_loinc_cols', [col_sn, col_ln, col_com, col_sys, ])
+    if not matching_rules: matching_rules = {target_col: target_descriptors for target_col in target_cols}    
+    # e.g.
+    # matching_rules = {'test_order_name': [col_sn, col_ln, col_com, col_sys, ], 
+    #                   'test_result_name': [col_sn, col_ln, col_com, col_sys, col_prop, ], 
+    #                   'test_specimen_type': [col_sys, ], 
+    #                   'test_result_units_of_measure': [col_sn, col_prop], 
+    #                   }
     ######################################
+
     # default to use all LOINC codes associatied with the given cohort as the source of training corpus
     if model is None: 
         model = build_tfidf_model(cohort=cohort, df_src=df_src, target_cols=target_cols, ngram_range=ngram_range, max_features=max_features)
@@ -621,7 +621,11 @@ def text_feature_transform2(df, **kargs):
             assert ts_meta_pos.shape[1] == ts_meta_neg.shape[1]
 
             # we do not necessarily have negative examples (e.g. test data
-            nRef = len(meta_data[1]['test_order_name'])
+            try: 
+                nRef =  next(iter(meta_data[1].values())) # len(meta_data[1]['test_order_name'])
+            except: 
+                nRef = -1
+                print("[transform2] Could not iterate meta data:\n{}\n".format(meta_data))
             assert ts_meta_pos.shape[0] == ts_pos.shape[0], "ts_meta_pos(n={}) <> ts_pos(n={}) | n(ref): {}".format(
                          ts_meta_pos.shape[0], ts_pos.shape[0], nRef)
             assert ts_meta_neg.shape[0] == ts_neg.shape[0], "ts_meta_neg(n={}) <> ts_neg(n={})".format(ts_meta_neg.shape[0], ts_neg.shape[0])
@@ -750,11 +754,11 @@ def demo_create_training_data(**kargs):
 
     # note that sometimes we may also want to compare with MTRT
     matching_rules = kargs.get('matching_rules', 
-                                    { 'test_order_name': [col_sn, col_ln, col_com, ],  # col_sys
-                                       'test_result_name': [col_sn, col_ln, col_com,  ], #  col_sys, col_prop
-                                       # 'test_specimen_type': [col_sys, ], 
-                                       # 'test_result_units_of_measure': [col_sn, col_prop], }
-                                       }
+                            { 'test_order_name': [col_sn, col_ln, col_com, ],  # col_sys
+                               # 'test_result_name': [col_sn, col_ln, col_com,  ], #  col_sys, col_prop
+                               # 'test_specimen_type': [col_sys, ], 
+                               # 'test_result_units_of_measure': [col_sn, col_prop], }
+                               }
                        )
     ######################################
 
