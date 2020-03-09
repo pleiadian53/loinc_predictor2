@@ -1135,7 +1135,7 @@ def save_dataset(ts, dtype='test', **kargs):
 
     if not output_file: 
         output_file = "matchmaker-{}-{}-{}.csv".format(dtype, cohort, suffix) if len(str(suffix)) > 0 else "matchmaker-{}-{}.csv".format(dtype, cohort)
-    print("[save] Saving matchmaker data (dtype={}) as:\n{}\n".format(dtype, output_file))
+    print("[save] Saving matchmaker data (dtype={}, suffix={}) as:\n{}\n".format(dtype, suffix, output_file))
 
     dp.save_generic(ts, output_file=output_file, output_dir=output_dir, 
         # parameters below are only for display

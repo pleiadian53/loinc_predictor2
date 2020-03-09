@@ -559,13 +559,9 @@ def cosine_similarity(s1, s2, model, value_default=0.0):
     return s
 
 def compute_similarity_with_loinc(row, code, model, loinc_lookup={}, value_default=0.0, **kargs):
-    def iter_rules(target_cols, target_descriptors):
-        if len(matching_rules) > 0: 
-            for col, target_descriptors in matching_rules.items():
-                for dpt in target_descriptors:
-                    yield (col, dpt)
-        else: 
-            for col, dpt in itertools.product(target_cols, target_descriptors): 
+    def iter_rules(matching_rules):
+        for col, target_descriptors in matching_rules.items():
+            for dpt in target_descriptors:
                 yield (col, dpt)
 
     #from scipy.spatial import distance # cosine similarity
@@ -606,7 +602,7 @@ def compute_similarity_with_loinc(row, code, model, loinc_lookup={}, value_defau
     named_scores = defaultdict(dict)
 
     # for query, dpt in itertools.product(target_cols, target_descriptors):  
-    for query, dpt in iter_rules(target_cols, target_descriptors):
+    for query, dpt in iter_rules(matching_rules):
         attributes.append(f"{query}_{dpt}")  # col, desc
 
         qv = row[query]

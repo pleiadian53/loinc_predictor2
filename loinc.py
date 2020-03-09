@@ -968,7 +968,7 @@ def compare_longname_mtrt(df_mtrt=None, df_loinc=None, n_display=-1, codes=[], *
 
     table_mtrt = kargs.get('input_mtrt', 'loinc-leela.csv')
     if df_mtrt is None: df_mtrt = LoincMTRT.load_table()
-    if df_loinc is None: df_loinc = load_loinc_table(dehyphenate=True)
+    if df_loinc is None: df_loinc = LoincTable.load_table(dehyphenate=True)
 
     col_key_mtrt, col_value_mtrt = LoincMTRT.col_key, LoincMTRT.col_value
     col_key_loinc = LoincTable.col_code

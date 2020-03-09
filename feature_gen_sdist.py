@@ -1222,10 +1222,6 @@ def make_string_distance_features(df=None, dataType='test_order_name', loincmap=
 def preprocess_text_simple(df=None, col='', source_values=[], value_default=""):
     return text_processor.preprocess_text_simple(df=df, col=col, source_values=source_values, value_default=value_default)
  
-def iter_rules(multibag): 
-    for k, dk in multibag.items():
-        for x in dk:
-            yield (k, x)
 def compute_similarity_with_loinc(row, code, loinc_lookup={}, vars_lookup={}, **kargs):
     #from scipy.spatial import distance # cosine similarity
     import itertools
@@ -1264,23 +1260,18 @@ def compute_similarity_with_loinc(row, code, loinc_lookup={}, vars_lookup={}, **
     target_descriptors = kargs.get('target_loinc_cols', [col_sn, col_ln, col_com])
 
     if not matching_rules: matching_rules = {target_col: target_descriptors for target_col in target_cols}
+
+    # iterate over pairwise comparisons between T-attributes and loinc attributes (e.g. SH, LN, Component)
+    def iter_rules():
+        for col, target_descriptors in matching_rules.items():
+            for dpt in target_descriptors:
+                yield (col, dpt)
     ########################
 
     if not loinc_lookup: loinc_lookup = lmt.get_loinc_descriptors(dehyphenate=dehyphen, remove_dup=remove_dup_tokens, verify=True)
     if not vars_lookup: 
         vars_lookup = LoincTSet.load_sdist_var_descriptors(target_cols, process_text=True, remove_dup=remove_dup_tokens)
         # ... by default, process_string is invoked on the T-attributes
-
-    # --- Matching rules 
-    #     * compare {test_order_name, test_result_name} with SH, LN, Component
-    def iter_rules():
-        if len(matching_rules) > 0: 
-            for col, target_descriptors in matching_rules.items():
-                for dpt in target_descriptors:
-                    yield (col, dpt)
-        else: 
-            for col, dpt in itertools.product(target_cols, target_descriptors): 
-                yield (col, dpt)
 
     scores = []
     attributes = [] 

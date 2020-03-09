@@ -18,7 +18,8 @@ from utils_plot import saveFig
 from analyzer import run_model_selection
 from tree_analyzer import analyze_path
 
-from loinc import FeatureSet, MatchmakerFeatureSet
+from loinc import LoincTable, FeatureSet, MatchmakerFeatureSet
+
 """
 
 
@@ -191,6 +192,9 @@ def demo_predict(**kargs):
     col_assignment = MatchmakerFeatureSet.col_assignment
     col_score = MatchmakerFeatureSet.col_score
 
+    # --- Loinc Table parameters 
+    col_code = LoincTable.col_code
+
     # load data
     cohort = kargs.get('cohort', 'hepatitis-c')
     verbose = kargs.get('verbose', 1)
@@ -199,6 +203,9 @@ def demo_predict(**kargs):
    
     # control logic 
     include_meta = kargs.get("include_meta", True)
+
+    # switches 
+    tDehyphenate = kargs.get("dehyphenate", True)
 
     # conf_threshold = 0.8  # if the matchmaker produces a probability score (of a match) less than this number, ... 
     # ... then we suspect that this LOINC assignment is probably wrong, and we then need to seek other candidates
@@ -282,6 +289,16 @@ def demo_predict(**kargs):
     ts_test_low_conf = ts_test.loc[ts_test[col_score] < conf_threshold]
 
     # propose candidates
+    df_loinc = LoincTable.load_table(dehyphenate=tDehyphenate)
+
+    # compute similarity scores between 'target_cols' and the LOINC descriptor of 'code' given trained 'model'
+    # pos_instances = []
+    # for code in df_loinc[col_code]: 
+    #     sv, names, named_scores = \
+    #         compute_similarity_with_loinc(row, code, model=model, loinc_lookup=loinc_lookup, 
+    #             target_cols=target_cols, target_descriptors=target_descriptors) # target_descriptors
+    #     pos_instances.append(sv)
+
     # rank candidates    
 
     return
