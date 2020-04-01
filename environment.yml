@@ -1,4 +1,4 @@
-name: loinc_predictor
+name: loinc_predictor2
 channels:
 - conda-forge
 
