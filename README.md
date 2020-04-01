@@ -1,5 +1,5 @@
-Introduction and extended documentation
----------------------------------------
+Introduction
+------------
 
 Standards and accuracy for the Logical Observation Identifiers Names and Codes (LOINC) are critical for interoperability and data sharing. In addition, many disease phenotyping analytics are also contingent upon the accuracy of the LOINC codes. However, there are
 non-trivial instances of inconsistency and inaccuracy in the general EMR data. Without a consistent coding accuracy, clinical data may not be easily harmonized, shared, or interpreted in a meaningful context. 
