@@ -1,9 +1,16 @@
 Introduction and extended documentation
 ---------------------------------------
 
-Standards and accuracy for the Logical Observation Identifiers Names and Codes (LOINC) are critical for interoperability and data sharing. In addition, many disease phenotyping analytics are also contingent upon the accuracy of the LOINC codes. However, ... (please more at 
-https://prognos.atlassian.net/wiki/spaces/DS/pages/466649366/Loinc+Predictor)
+Standards and accuracy for the Logical Observation Identifiers Names and Codes (LOINC) are critical for interoperability and data sharing. In addition, many disease phenotyping analytics are also contingent upon the accuracy of the LOINC codes. However, there are
+non-trivial instances of inconsistency and inaccuracy in the general EMR data. Without a consistent coding accuracy, clinical data may not be easily harmonized, shared, or interpreted in a meaningful context. 
 
+We seek to develop an automated pipeline using machine learning and NLP methods that leverages noisy labels to map laboratory data to LOINC codes. 
+
+The target LOINC codes for this module depends on the input condition of interest. For instance, patients with Hepatitis C are associated with a set of LOINC codes (700+), which represent all the known lab tests in different measurement units, standards, among others. 
+
+For further details on how LOINC codes are structured, see [this Q & A](https://loinc.org/faq/structure-of-loinc-codes-and-names/)
+
+If the LOINC codes already exist for a particular row (of the patient data), this module can be thought of as providing a basis for validation; if on the other hand the LOINC codes do not exist for certain patient records, then this module can serve as a LOINC codes predictor.
 
 Clone and reproduce results
 ---------------------------
@@ -16,14 +23,13 @@ $ conda env create -f environment.yml
 
 Prerequisite
 ------------
-For ease of illustration, we shall assume that the package (loinc_predictor) is installed under 
-`<project_dir>/loinc_predictor`, where project_dir is the directory of your choice hosting this module.
+For ease of illustration, we shall assume that the package (loinc_predictor2) is installed under 
+`<project_dir>/loinc_predictor2`, where project_dir is the directory of your choice hosting this module.
 
 
 **1. Non-standard modules**: 
 
 Please install the following dependent packages:
-
 
 1a. General purposes: 
    
@@ -51,15 +57,15 @@ Please install the following dependent packages:
 **2. Input data**:
 
 Training LOINC predictive models requires input training data. These data are assumed to 
-have been made available and kept under `<project_dir>/loinc_predictor/data`
+have been made available and kept under `<project_dir>/loinc_predictor2/data`
 
-An example dataset sampled from Andromeda specific to the Hepatitis-C cohort is included under:
+An example dataset sampled from a datalake originated from a galaxy far far away (Androdmeda) specific to the Hepatitis-C cohort is included under:
 
         data/andromeda-pond-hepatitis-c.csv.fake 
 
-Note that due to the limit of file size and the sensitivity of the data, we are unable to host physical copies of certains file directly but instead, a link to physical file on the Amazon S3 bucket is included within these files. All the data files suffixed by .fake are such files including the example training data mentioned above.
+Note that due to the limit of file size and the sensitivity of the data, we are unable to host physical copies of certains file directly but instead, a link to physical file on the Amazon S3 bucket is included within these files. All the data files suffixed by .fake are such files including the example training data mentioned above (I currently do not have access to the S3 bucket hosting the original data but you are free to provide your own patient data). 
 
-Data can be curated from subsampling Andromeda datalake. A few tips on the training data curation. 
+Data can be curated from subsampling a given clinical data repository (CDR). A few tips on the training data curation. 
 
 It is highly recommended that the training data be prepared based on the disease of interest since there are large and ever-growing 
 number of LOINC codes as more laboratoy tests and standards are introduced to the healthcare system. For instannce, a Hepatitis-C cohort 
@@ -67,11 +73,10 @@ can be linked to at least 700 or more LOINC codes, making it challenging for pre
 labels (i.e. multiclass classfication problem with large number of classes). Therefore, we shall train the LOINC predictor on a disease-specific 
 basis. 
 
-Once the target disease is given, we are now ready to gather data from Andromeda datalake. A Hepatitis-C dataset would comprise sampled rows of patient data from Andromeda that match a set of ICD codes pertaining to Hepatitis C. Please refer to [Clinical Classfication Software](https://www.hcup-us.ahrq.gov/tools_software.jsp) on the Healthcare Cost and Utilization Project (HCUP) website for more info on how to obtain the target ICD codes for different clinical conditions of interest. After obtaining the set of related ICD codes, we can then post queries 
-with respect to the columns: `diagnosis_codes` and `billing_diagnosis_codes` to pull relevant rows from Andromeda (see **cohort_search.py** for 
-example queries).
+Once the target disease is given, we are now ready to gather data from CDR. A Hepatitis-C dataset would comprise sampled rows of patient data from Andromeda that match a set of ICD codes pertaining to Hepatitis C. Please refer to [Clinical Classfication Software](https://www.hcup-us.ahrq.gov/tools_software.jsp) on the Healthcare Cost and Utilization Project (HCUP) website for more info on how to obtain the target ICD codes for different clinical conditions of interest. After obtaining the set of related ICD codes, we can then post queries 
+with respect to the columns: `diagnosis_codes` and `billing_diagnosis_codes` to pull relevant rows from CDR (see **cohort_search.py** for example queries). Of course, the aforementioned column names may be changed according to the schema of your CDR. 
 
-The clinical variables used to predict/correct LOINC codes are the columns/attributes of the table obtraind from applying transformations.withMedivoTestResultType() available from [Samantha](https://github.com/medivo/samantha/blob/master/src/main/scala/ai/prognos/samantha/clinical/transformations.scala). Note that useful variables for the prediction may be just a subset of these patient attributes. Example variables are: `test_result_name`, `test_result_value`, `test_order_name`, `test_result_units_of_measure`, among many others. Class labels for the training data are the LOINC codes (as they are what we are trying to predict). LOINC labels are avaiable through `test_result_loinc_code`. 
+The clinical variables used to predict/correct LOINC codes are the columns/attributes of the table of a given CDR. Variables are mostly self-explanatory (Codebook are to be uploaded shortly). Example variables are: `test_result_name`, `test_result_value`, `test_order_name`, `test_result_units_of_measure`, among many others. Class labels for the training data are the LOINC codes (as they are what we are trying to predict). LOINC labels are avaiable through `test_result_loinc_code`. 
 
 Due to the size limit, we will not share the full dataset here. However, coming up, we shall upload sample (toy) datasets ... 
 
@@ -82,12 +87,12 @@ in the training data given in (2). A careful EDA will often indicate that a subs
 the class sample sizes as much as possible, it may be of interest to gather more training data from random subset of Andromeda matching 
 our disease-specific LOINC codes. 
 
-This external data from non-target disease cohort are also, by default, assumed to be kept under `<project_dir>/loinc_predictor/data`
+This external data from non-target disease cohort are also, by default, assumed to be kept under `<project_dir>/loinc_predictor2/data`
 
 
 **4. LOINC resources**: 
 
-Relevant files such as **LoincTable.csv**, MapTo.csv are expected to be read from: `<project_dir>/loinc_predictor/LoincTable`
+Relevant files such as **LoincTable.csv**, MapTo.csv are expected to be read from: `<project_dir>/loinc_predictor2/LoincTable`
 
 
 ## Directory Structure
@@ -134,13 +139,13 @@ Input and Output
 * Data loader(s) assume, by default, that the input data comes from a "data" directory
 directly under the working/project directory (where all the python modules are kept)
 
-    e.g. <project_dir>/loinc_predictor/data
+    e.g. <project_dir>/loinc_predictor2/data
 
 * The Loinc table and its resources are by default read from the following directory: 
 
-     <project_dir>/loinc_predictor/LoincTable
+     <project_dir>/loinc_predictor2/LoincTable
 
 * Predictive performance evaluation is saved as a dataframe to the following directory 
 
-     <project_dir>/loinc_predictor/result
+     <project_dir>/loinc_predictor2/result
      
