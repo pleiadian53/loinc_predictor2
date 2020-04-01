@@ -16,7 +16,7 @@ Clone and reproduce results
 ---------------------------
 
 ````
-$ git clone https://github.com/medivo/loinc_predictor2
+$ git clone https://github.com/pleiadian53/loinc_predictor2
 $ cd loinc_predictor2
 $ conda env create -f environment.yml
 ````
