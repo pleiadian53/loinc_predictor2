@@ -9,8 +9,8 @@ Clone and reproduce results
 ---------------------------
 
 ````
-$ git clone https://github.com/medivo/LoincPredictor
-$ cd LoincPredictor
+$ git clone https://github.com/medivo/loinc_predictor2
+$ cd loinc_predictor2
 $ conda env create -f environment.yml
 ````
 
