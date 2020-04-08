@@ -61,7 +61,7 @@ have been made available and kept under `<project_dir>/loinc_predictor2/data`
 
 An example dataset sampled from a datalake originated from a galaxy far far away (Androdmeda) specific to the Hepatitis-C cohort is included under:
 
-        data/andromeda-pond-hepatitis-c.csv.fake 
+        data/andromeda-pond-hepatitis-c.csv.fake (not available in public due to data sensitivity)
 
 Note that due to the limit of file size and the sensitivity of the data, we are unable to host physical copies of certains file directly but instead, a link to physical file on the Amazon S3 bucket is included within these files. All the data files suffixed by .fake are such files including the example training data mentioned above (I currently do not have access to the S3 bucket hosting the original data but example data files will be provided shortly; in the meantime, you are free to adapt and use your own clinical data). 
 
